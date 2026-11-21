@@ -111,7 +111,7 @@ export function Decks({ folderId }: { folderId: string | null }) {
           title={folder?.name ?? 'Decks'}
           actions={
             <>
-              <Button onClick={() => runCommand('io.importDeck')} kbd="io.importDeck">
+              <Button className="desktop-only" onClick={() => runCommand('io.importDeck')} kbd="io.importDeck">
                 Import
               </Button>
               <Button variant="primary" onClick={() => runCommand('deck.new')}>

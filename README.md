@@ -1,6 +1,6 @@
 # Studywise Courses
 
-A course, flashcard and notes app for Mac and Windows.
+A course, flashcard and notes app for Mac and Windows, with an Android app that syncs with it.
 
 Make a course for a module, then add each week's slides, transcripts and readings. Claude splits every week into topics and teaches each one in short sections: a screen of notes (with the slide's figure if it helps), a few quick questions, then the next bit. Each topic has a separate test you take from the course page when you're ready, and leaves recall cards that pop up while you learn other topics and in spaced review.
 
@@ -35,6 +35,20 @@ npm run dist:win   # Windows: release/Studywise-Courses-Setup.exe
 ```
 
 The app isn't signed. On a Mac, right-click it and pick Open the first time. On Windows, click More info, then Run anyway.
+
+## Android app
+
+The phone app is the same app laid out for a phone: courses, decks, flashcards and notes, stored on the phone so you can study offline. It syncs both ways with Studywise on your computer over your Wi‑Fi, and AI features on the phone (Explain, marking written answers, writing topics, generating cards) run on the computer.
+
+Build it (needs Android Studio, or the Android SDK and a JDK 17–21):
+
+```sh
+npm run android:apk    # release/Studywise-android.apk
+```
+
+Install the APK on your phone (allow installing from unknown sources), then pair it: on the computer open Settings → Phone, turn on syncing and press Pair a phone; on the phone open Settings → Sync and type the address and code it shows. Both need to be on the same network (or the same Tailscale network).
+
+`npm run android:run` builds and runs it on a connected phone or emulator. To work on the phone layout in a browser, run `npm run sync:demo` (a desktop backend with a demo library and mock AI that prints a pairing code) and `npm run mobile:dev`, then open http://localhost:5199 at phone size.
 
 ## Development
 

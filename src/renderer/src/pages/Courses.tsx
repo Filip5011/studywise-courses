@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { GraduationCap, Plus, FileText, X, Upload, Download } from 'lucide-react'
 import { importSharedWeek } from '../lib/weekShare'
+import { IS_MOBILE } from '../lib/platform'
 import type { CourseSummary } from '@shared/course'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
@@ -20,23 +21,31 @@ export function Courses() {
         title="Courses"
         actions={
           <>
-            <Button onClick={() => void importSharedWeek()} title="Add a week a friend shared with you (.studyweek)">
+            <Button className="desktop-only" onClick={() => void importSharedWeek()} title="Add a week a friend shared with you (.studyweek)">
               <Download className="size-4" /> Add a shared week
             </Button>
-            <Button variant="primary" onClick={() => openNew([])}>
+            <Button variant="primary" className="desktop-only" onClick={() => openNew([])}>
               <Plus className="size-4" /> New course
             </Button>
           </>
         }
       >
-        Make a course for a module, then add each week’s slides, transcripts and readings as you go. Claude splits every week into topics and teaches each one in short sections, with questions as you go.
+        {IS_MOBILE
+          ? 'Your courses from Studywise on your computer. Learn each topic in short sections, with flashcards and questions as you go.'
+          : 'Make a course for a module, then add each week’s slides, transcripts and readings as you go. Claude splits every week into topics and teaches each one in short sections, with questions as you go.'}
       </PageTitle>
       {courses && courses.length === 0 && (
         <Empty icon={<GraduationCap className="size-8" />} title="No courses yet">
-          <p className="mb-4">Start with week 1, or with nothing at all, and add weeks as the module goes on.</p>
-          <Button variant="primary" onClick={() => openNew([])}>
-            <Plus className="size-4" /> New course
-          </Button>
+          {IS_MOBILE ? (
+            <p className="mb-4">Make a course in Studywise on your computer, from your lecture slides and transcripts. It shows up here when your phone syncs.</p>
+          ) : (
+            <>
+              <p className="mb-4">Start with week 1, or with nothing at all, and add weeks as the module goes on.</p>
+              <Button variant="primary" onClick={() => openNew([])}>
+                <Plus className="size-4" /> New course
+              </Button>
+            </>
+          )}
         </Empty>
       )}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

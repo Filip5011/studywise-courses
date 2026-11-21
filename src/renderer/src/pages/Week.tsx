@@ -34,6 +34,7 @@ import { askText, confirmDialog } from '../lib/dialogs'
 import { Shell, PageTitle } from '../components/Shell'
 import { Button, Dots, Menu, MenuItem, Pill, ProgressBar, cx } from '../components/ui'
 import { JobLive } from '../components/JobLive'
+import { IS_MOBILE } from '../lib/platform'
 
 export const runningJob = (jobs: JobInfo[], kind: JobInfo['kind'], key: string, value: string) => jobs.find((j) => j.kind === kind && j.status === 'running' && j.meta?.[key] === value)
 
@@ -167,7 +168,7 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
             >
               {(close) => (
                 <>
-                  <MenuItem icon={<Upload className="size-4" />} onClick={() => (close(), void addFiles())}>
+                  <MenuItem desktopOnly icon={<Upload className="size-4" />} onClick={() => (close(), void addFiles())}>
                     Add files
                   </MenuItem>
                   {w.files.length > 0 && !planning && (
@@ -249,7 +250,7 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
         <section>
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="text-[1.1rem] font-semibold tracking-tight">Files</h2>
-            {!planning && (
+            {!planning && !IS_MOBILE && (
               <Button size="sm" variant="ghost" onClick={addFiles}>
                 <Plus className="size-4" /> Add files
               </Button>
@@ -261,6 +262,8 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
                 <FileRow key={f.id} f={f} canRemove={!planning} reload={reload} />
               ))}
             </ul>
+          ) : IS_MOBILE ? (
+            <p className="rounded-xl border border-dashed border-line px-5 py-6 text-center text-[0.92rem] text-muted">Add this week’s slides and transcripts in Studywise on your computer.</p>
           ) : (
             <button onClick={addFiles} className="flex w-full flex-col items-center gap-1 rounded-xl border-2 border-dashed border-line px-5 py-6 text-center transition-colors hover:border-accent">
               <Upload className="size-5 text-muted" />
@@ -324,6 +327,15 @@ const fileIcon = (name: string) => {
 function FileRow({ f, canRemove, reload }: { f: CourseFile; canRemove: boolean; reload: () => void }) {
   const Icon = fileIcon(f.name)
   const open = (reveal: boolean) => api.courses.openFile({ fileId: f.id, reveal }).catch((e) => toast(errorText(e), 'bad'))
+  // The files themselves stay on the computer.
+  if (IS_MOBILE)
+    return (
+      <li className="flex items-center gap-3 px-4 py-3">
+        <Icon className="size-4 shrink-0 text-muted" />
+        <span className="min-w-0 flex-1 truncate">{f.name}</span>
+        {f.pages ? <span className="shrink-0 text-[0.85rem] text-muted">{f.pages} pages</span> : null}
+      </li>
+    )
   return (
     <li className="flex items-center gap-3 px-4 py-2.5">
       <Icon className="size-4 shrink-0 text-muted" />

@@ -25,6 +25,7 @@ import { backupLibrary, restoreLibrary } from './backup'
 import * as library from './library'
 import { paths } from './paths'
 import { getUsage } from './usage'
+import * as syncServer from './sync/server'
 import {
   CardInput,
   CardFormat,
@@ -469,6 +470,13 @@ export const handlers = {
     importWeek: h(z.object({ file: z.string().min(1), courseId: z.string().nullable() }), (i) => weekShare.importWeek(i.file, i.courseId ? { courseId: i.courseId } : { newCourse: true }))
   },
 
+  sync: {
+    status: h(none, () => syncServer.syncStatus()),
+    setEnabled: h(z.object({ enabled: z.boolean() }), (i) => syncServer.setSyncEnabled(i.enabled)),
+    pairCode: h(none, () => syncServer.newPairCode()),
+    unpair: h(z.object({ id }), (i) => syncServer.unpair(i.id))
+  },
+
   jobs: {
     list: h(none, () => listJobs()),
     get: h(z.object({ id }), (i) => getJob(i.id)),
@@ -723,6 +731,27 @@ export function setAfterCall(fn: (channel: string) => void): void {
   afterCall = fn
 }
 
+/**
+ * Runs one handler for a paired phone (see sync/server). Streamed text goes to
+ * `stream`; there's no window, so handlers that open dialogs are blocked there.
+ */
+export async function runHandler(channel: string, payload: unknown, stream: (streamId: string, text: string) => void): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  const [domain, method] = channel.split('.')
+  const handler = (handlers as unknown as Record<string, Record<string, Handler<unknown, unknown, unknown>>>)[domain]?.[method]
+  if (!handler) return { ok: false, error: `Unknown request ${channel}` }
+  const parsed = handler.input.safeParse(payload)
+  if (!parsed.success) return { ok: false, error: `Invalid request to ${channel}: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}` }
+  const sender = { isDestroyed: () => true, send: () => {} } as unknown as WebContents
+  try {
+    const data = await handler.fn(parsed.data, { sender, stream: (sid) => (sid ? (text: string) => stream(sid, text) : undefined) })
+    afterCall?.(channel)
+    return { ok: true, data }
+  } catch (e) {
+    console.error(`[sync rpc] ${channel} failed:`, e)
+    return { ok: false, error: friendlyError(e) }
+  }
+}
+
 export function registerIpc(): void {
   for (const [domain, methods] of Object.entries(handlers)) {
     for (const [method, handler] of Object.entries(methods as Record<string, Handler<unknown, unknown, unknown>>)) {
@@ -761,5 +790,6 @@ export function refreshPlanUsage(): Promise<ReturnType<typeof getUsage>> {
 }
 
 export function broadcast(payload: unknown): void {
+  syncServer.recordEvent(payload)
   for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('sw:event', payload)
 }

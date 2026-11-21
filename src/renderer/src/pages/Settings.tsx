@@ -26,7 +26,9 @@ import {
   ListChecks,
   Wand2,
   Info,
-  Archive
+  Archive,
+  Smartphone,
+  Laptop
 } from 'lucide-react'
 import type { Preset, PresetVersion, CustomAction, ModelChoice, AiCall, Thresholds, AiProvider, OllamaModel } from '@shared/types'
 import { ACTION_PLACEMENTS, DEFAULT_THRESHOLDS } from '@shared/types'
@@ -41,16 +43,26 @@ import { Button, Card, Field, Input, Modal, Pill, Segmented, Select, Textarea, T
 import { Markdown } from '../components/Markdown'
 import { UsageBars } from '../components/UsageMeter'
 import { OllamaModelOptions, useOllamaModels } from '../components/OllamaModels'
+import { DesktopPhoneTab, MobileSyncTab } from '../components/PhoneSync'
+import { IS_MOBILE } from '../lib/platform'
 
-const TABS = [
+const DESKTOP_TABS = [
   { id: 'general', label: 'General', icon: Gear },
   { id: 'claude', label: 'AI provider', icon: Terminal },
   { id: 'models', label: 'Models', icon: Cpu },
   { id: 'prompts', label: 'Prompts', icon: Sparkles },
   { id: 'actions', label: 'Custom actions', icon: Wand2 },
   { id: 'usage', label: 'AI usage', icon: Activity },
+  { id: 'phone', label: 'Phone', icon: Smartphone },
   { id: 'jobs', label: 'Jobs', icon: ListChecks }
 ] as const
+// On the phone, AI is set up on the computer; what's left is the phone's own settings and syncing.
+const MOBILE_TABS = [
+  { id: 'general', label: 'General', icon: Gear },
+  { id: 'sync', label: 'Sync', icon: Laptop },
+  { id: 'jobs', label: 'Jobs', icon: ListChecks }
+] as const
+const TABS: readonly { id: string; label: string; icon: typeof Gear }[] = IS_MOBILE ? MOBILE_TABS : DESKTOP_TABS
 
 export function Settings({ tab = 'general' }: { tab?: string }) {
   const go = useStore((s) => s.go)
@@ -68,14 +80,14 @@ export function Settings({ tab = 'general' }: { tab?: string }) {
   }, [cur])
   return (
     <Shell wide>
-      <PageTitle eyebrow="Studywise Courses" title="Settings" />
-      <div className="mb-6 flex flex-wrap gap-1.5">
+      <PageTitle eyebrow={IS_MOBILE ? undefined : 'Studywise Courses'} title="Settings" />
+      <div className="no-scrollbar -mx-4 mb-6 flex gap-1.5 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => go({ name: 'settings', tab: t.id })}
             className={cx(
-              'inline-flex items-center gap-2 rounded-full px-4 py-2 text-[0.92rem] font-semibold transition-[background,color,transform] duration-300 active:scale-95',
+              'inline-flex shrink-0 items-center gap-2 rounded-full px-4 py-2 text-[0.92rem] font-semibold transition-[background,color,transform] duration-300 active:scale-95',
               cur === t.id ? 'bg-ink text-bg' : 'bg-surface-2 text-muted hover:text-ink'
             )}
           >
@@ -91,6 +103,8 @@ export function Settings({ tab = 'general' }: { tab?: string }) {
         {cur === 'prompts' && <PromptsTab />}
         {cur === 'actions' && <ActionsTab />}
         {cur === 'usage' && <UsageTab />}
+        {cur === 'phone' && <DesktopPhoneTab />}
+        {cur === 'sync' && <MobileSyncTab />}
         {cur === 'jobs' && <Jobs embedded />}
       </div>
     </Shell>
@@ -130,11 +144,11 @@ function General() {
             ]}
           />
         </Field>
-        <p className="text-[0.85rem] text-muted">
+        <p className="desktop-only text-[0.85rem] text-muted">
           Text size: <Kbd>{keyLabel("⌘=")}</Kbd> <Kbd>{keyLabel("⌘-")}</Kbd> <Kbd>{keyLabel("⌘0")}</Kbd>. Cycle theme: <Kbd>{keyLabel("⇧⌘L")}</Kbd>.
         </p>
       </Card>
-      <Card className="flex flex-col gap-4">
+      <Card className="desktop-only flex flex-col gap-4">
         <h3 className="text-lg font-semibold">AI jobs</h3>
         <div className="grid grid-cols-3 gap-3">
           <Field label="Parallel calls">
@@ -158,7 +172,7 @@ function General() {
             { value: 'sm2', label: 'SM-2' }
           ]}
         />
-        <Toggle checked={s['anki.keepSchedule'] !== false} onChange={(v) => set('anki.keepSchedule', v)} label="Keep review progress when importing Anki decks" />
+        {!IS_MOBILE && <Toggle checked={s['anki.keepSchedule'] !== false} onChange={(v) => set('anki.keepSchedule', v)} label="Keep review progress when importing Anki decks" />}
         <p className="text-[0.88rem] text-muted">
           {((s['review.scheduler'] as string) ?? 'adaptive') === 'adaptive'
             ? 'Cards start at difficulty 0.60 with three 1-day steps, then intervals grow fast (≈3, 8, 20, 115, 280+ days). A card comes back after interval × (0.694 − 0.187 × difficulty), so harder cards return sooner.'
@@ -175,7 +189,8 @@ function General() {
           <input type="range" min={0} max={9} value={th.partial} onChange={(e) => set('thresholds', { ...th, partial: Math.min(Number(e.target.value), th.correct - 1) })} className="accent-[var(--accent)]" />
         </Field>
       </Card>
-      <Card className="flex flex-col gap-3">
+      {IS_MOBILE && <PhoneLibrary />}
+      <Card className="desktop-only flex flex-col gap-3">
         <h3 className="flex items-center gap-2 text-lg font-semibold">
           <Archive className="size-5" /> Your library
         </h3>
@@ -194,19 +209,42 @@ function General() {
           </Button>
         </div>
       </Card>
-      <MoveLibrary />
+      {!IS_MOBILE && <MoveLibrary />}
       <Card className="flex flex-col gap-2 lg:col-span-2">
         <h3 className="flex items-center gap-2 text-lg font-semibold">
           <Info className="size-5" /> About
         </h3>
         <p className="text-[0.92rem] text-muted">
-          Studywise {info?.version} · Electron {info?.electron} {info?.mock && <Pill tone="warn">AI_MOCK on</Pill>}
+          Studywise {info?.version} {IS_MOBILE ? '· Android' : `· Electron ${info?.electron}`} {info?.mock && <Pill tone="warn">AI_MOCK on</Pill>}
         </p>
         <p className="text-[0.92rem] text-muted">
-          AI features run through the Claude Code CLI on this computer with your own Claude subscription, or through Ollama if you switch to it under AI provider. Studywise never sees your Claude login. Use is subject to each provider’s terms.
+          {IS_MOBILE && 'On the phone, AI features run on your paired computer. '}AI features run through the Claude Code CLI on this computer with your own Claude subscription, or through Ollama if you switch to it under AI provider. Studywise never sees your Claude login. Use is subject to each provider’s terms.
         </p>
       </Card>
     </div>
+  )
+}
+
+/** The phone's own copy of the library. */
+function PhoneLibrary() {
+  return (
+    <Card className="flex flex-col gap-3">
+      <h3 className="flex items-center gap-2 text-lg font-semibold">
+        <Archive className="size-5" /> On this phone
+      </h3>
+      <p className="text-[0.9rem] text-muted">Your library is stored on the phone so you can study offline, and syncs with your computer. If something looks wrong, clear the phone’s copy: it comes back from the computer on the next sync. Changes not synced yet are lost.</p>
+      <div>
+        <Button
+          variant="ghost"
+          className="text-bad"
+          onClick={async () => {
+            if (await confirmDialog('Clear the phone’s copy?', 'Everything on this phone is removed, including changes that haven’t synced. Your computer’s library isn’t touched; pair again to bring it back.', { confirmText: 'Clear', danger: true })) await window.studywiseMobile?.resetLibrary()
+          }}
+        >
+          <Trash2 className="size-4" /> Clear and start again
+        </Button>
+      </div>
+    </Card>
   )
 }
 

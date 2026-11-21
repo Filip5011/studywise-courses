@@ -104,7 +104,7 @@ export function CoursePage({ id }: { id: string }) {
                   <MenuItem icon={<Plus className="size-4" />} onClick={() => (close(), setAdding(true))}>
                     Add a week
                   </MenuItem>
-                  <MenuItem icon={<Download className="size-4" />} onClick={() => (close(), void importSharedWeek({ courseId: id }))}>
+                  <MenuItem desktopOnly icon={<Download className="size-4" />} onClick={() => (close(), void importSharedWeek({ courseId: id }))}>
                     Add a shared week…
                   </MenuItem>
                   <MenuItem icon={<SlidersHorizontal className="size-4" />} onClick={() => (close(), void openAiSettings())}>

@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes, type SelectHTMLAttributes } from 'react'
+import { IS_MOBILE } from '../lib/platform'
 import { createPortal } from 'react-dom'
 import { X, Loader2 } from 'lucide-react'
 import { twMerge } from 'tailwind-merge'
@@ -59,6 +60,8 @@ export const Button = forwardRef<
 })
 
 export function Kbd({ children, className }: { children: ReactNode; className?: string }) {
+  // No keyboard on the phone.
+  if (IS_MOBILE) return null
   if (typeof children === 'string') children = keyLabel(children)
   return (
     <kbd className={cx('inline-flex items-center rounded-md border border-current/20 px-1.5 py-px font-mono text-[0.7rem] font-medium leading-4 opacity-80', className)}>
@@ -325,8 +328,9 @@ export function Menu({ trigger, children, align = 'right' }: { trigger: (open: (
   )
 }
 
-export function MenuItem({ onClick, children, icon, kbd, danger }: { onClick: () => void; children: ReactNode; icon?: ReactNode; kbd?: string; danger?: boolean }) {
+export function MenuItem({ onClick, children, icon, kbd, danger, desktopOnly }: { onClick: () => void; children: ReactNode; icon?: ReactNode; kbd?: string; danger?: boolean; /** Hidden in the phone app (it needs files or dialogs on the computer). */ desktopOnly?: boolean }) {
   const c = kbd ? COMMAND_BY_ID.get(kbd) : undefined
+  if (desktopOnly && IS_MOBILE) return null
   const k = c?.accelerator ?? c?.keys?.[0]
   return (
     <button

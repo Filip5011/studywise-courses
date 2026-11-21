@@ -1,0 +1,73 @@
+@import '../renderer/src/styles.css';
+@source '../renderer/src';
+@source '../shared';
+@source '.';
+
+/* The phone app: touch first, sized for one hand, clear of the status bar,
+   the gesture bar and the on-screen keyboard. */
+
+:root.is-mobile {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --nav-h: 52px;
+  --tab-h: calc(57px + var(--safe-bottom));
+}
+
+.is-mobile body {
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  font-size: 1rem;
+}
+.is-mobile button,
+.is-mobile [role='button'] {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* Inputs at 16px+ so focusing one never zooms the page. */
+.is-mobile input,
+.is-mobile textarea,
+.is-mobile select {
+  font-size: max(1rem, 16px);
+}
+
+.mobile-top {
+  padding-top: var(--safe-top);
+}
+.mobile-tabs {
+  padding-bottom: var(--safe-bottom);
+}
+.mobile-safe-top {
+  height: var(--safe-top);
+}
+.mobile-safe-bottom {
+  height: var(--safe-bottom);
+}
+
+/* Scroll areas that shouldn't show a bar (tab strips). */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Thin scrollbars are a desktop thing. */
+.is-mobile ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* Bottom sheets clear the gesture bar. */
+.is-mobile [data-modal] > div:last-child {
+  padding-bottom: var(--safe-bottom);
+}
+
+/* Desktop-only bits marked in the shared UI. */
+.is-mobile .desktop-only {
+  display: none !important;
+}
+:root:not(.is-mobile) .mobile-only {
+  display: none !important;
+}

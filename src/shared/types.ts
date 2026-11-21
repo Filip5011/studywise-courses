@@ -291,3 +291,29 @@ export function planUsageText(pu: JobPlanUsage | undefined, short = false): stri
   const amount = pct < 1 ? 'under 1%' : `about ${pct}%`
   return short ? `${amount} of 5h limit` : `${amount} of your 5-hour limit${pu.shared ? ' (shared with other jobs running at the same time)' : ''}`
 }
+
+// ---------------------------------------------------------------------------
+// Phone sync
+
+export interface SyncDevice {
+  id: string
+  name: string
+  lastSync: string | null
+  address: string | null
+}
+
+/** The desktop's side: the server phones sync with. */
+export interface SyncStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  /** This computer's local network addresses. */
+  addresses: string[]
+  name: string
+  deviceId: string
+  /** The code a phone types to pair, while pairing is open. */
+  pairCode: string | null
+  pairExpires: string | null
+  devices: SyncDevice[]
+  error: string | null
+}

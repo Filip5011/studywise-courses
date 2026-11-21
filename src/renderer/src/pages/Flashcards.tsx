@@ -5,6 +5,7 @@ import type { Card as CardT, ReviewState } from '@shared/types'
 import { schedule, newState, withDefaults, DEFAULT_SCHEDULER, type SchedulerKind } from '@shared/scheduler'
 import { insertRetry } from '@shared/retry'
 import { useStore, toast } from '../lib/store'
+import { IS_MOBILE } from '../lib/platform'
 import { api, errorText } from '../lib/api'
 import { useCommands } from '../lib/commands'
 import { Button, Kbd, ProgressBar, cx } from '../components/ui'
@@ -189,7 +190,7 @@ export function Flashcards({ deckId, mode, courseId }: { deckId: string; mode: '
                       </ul>
                     )}
                     <div className="mt-auto pt-6 text-center text-[0.85rem] text-muted">
-                      Click or press <Kbd>Space</Kbd> to flip
+                      {IS_MOBILE ? 'Tap to flip' : <>Click or press <Kbd>Space</Kbd> to flip</>}
                     </div>
                   </Face>
                   <Face label="Answer" back card={card}>
@@ -227,7 +228,7 @@ export function Flashcards({ deckId, mode, courseId }: { deckId: string; mode: '
                     >
                       <span className="text-[1.05rem]">{x.label}</span>
                       <span className="text-[0.8rem] font-medium opacity-80">
-                        {previews[x.r]} · <Kbd className="border-current/30">{x.r}</Kbd>
+                        {previews[x.r]}{!IS_MOBILE && <> · <Kbd className="border-current/30">{x.r}</Kbd></>}
                       </span>
                     </button>
                   ))}

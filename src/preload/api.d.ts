@@ -12,6 +12,8 @@ export type StudywiseEvent =
   | { type: 'fullscreen'; on: boolean }
   | { type: 'usage'; usage: UsageLimits }
   | { type: 'update'; status: UpdateStatus }
+  /** A phone synced; `received` rows changed here. */
+  | { type: 'sync'; received: number }
 
 declare global {
   interface Window {

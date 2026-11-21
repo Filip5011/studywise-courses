@@ -14,6 +14,7 @@ import {
 import type { Mark } from '@shared/questions'
 import type { Card } from '@shared/types'
 import { useStore, toast } from '../lib/store'
+import { IS_MOBILE } from '../lib/platform'
 import { api, errorText, streamCall } from '../lib/api'
 import { Markdown } from '../components/Markdown'
 import { Button, Dots, Kbd, Modal, Pill, Textarea, cx } from '../components/ui'
@@ -271,8 +272,8 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
   const verdict = slot.mark?.verdict
 
   return (
-    <div className="flex min-h-full flex-col px-[clamp(16px,3vw,40px)] pt-5 pb-10">
-      <div className="mx-auto flex w-full max-w-[860px] items-center gap-3">
+    <div className={cx('flex min-h-full flex-col px-[clamp(16px,3vw,40px)] pb-10', IS_MOBILE ? 'pt-2' : 'pt-5')}>
+      <div className={cx('mx-auto flex w-full max-w-[860px] items-center', IS_MOBILE ? 'gap-1' : 'gap-3')}>
         <Button
           variant="ghost"
           size="sm"
@@ -282,9 +283,10 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
             go({ name: 'week', courseId: topic.course_id, weekId: topic.week_id })
           }}
           title={test ? 'Leave the test (esc)' : 'Save your place and go back to the week (esc)'}
-          className="shrink-0"
+          aria-label={test ? 'Exit test' : 'Save and exit'}
+          className={cx('shrink-0', IS_MOBILE && 'size-10 px-0')}
         >
-          <X className="size-4" /> {test ? 'Exit test' : 'Save & exit'}
+          <X className={IS_MOBILE ? 'size-5' : 'size-4'} /> {!IS_MOBILE && (test ? 'Exit test' : 'Save & exit')}
         </Button>
         <Button variant="ghost" size="icon" onClick={back} disabled={at === 0} title="Back a step (B)">
           <ArrowLeft className="size-5" />
@@ -292,7 +294,17 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex items-center justify-between gap-2 text-[0.85rem] text-muted">
             <span className="truncate font-semibold">{content.title}</span>
-            <span>{test ? (step.kind === 'summary' ? 'Done' : `Topic test · ${Math.min(qDone + (step.kind === 'q' ? 1 : 0), qCount)} of ${qCount}`) : step.kind === 'summary' ? 'Done' : `Section ${Math.min(curSection + 1, sectionCount)} of ${sectionCount}`}</span>
+            <span className="shrink-0 tabular">
+              {test
+                ? step.kind === 'summary'
+                  ? 'Done'
+                  : `${IS_MOBILE ? '' : 'Topic test · '}${Math.min(qDone + (step.kind === 'q' ? 1 : 0), qCount)}${IS_MOBILE ? '/' : ' of '}${qCount}`
+                : step.kind === 'summary'
+                  ? 'Done'
+                  : IS_MOBILE
+                    ? `${Math.min(curSection + 1, sectionCount)}/${sectionCount}`
+                    : `Section ${Math.min(curSection + 1, sectionCount)} of ${sectionCount}`}
+            </span>
           </div>
           <div className="flex gap-1">
             {test
@@ -307,7 +319,7 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
         {/* A test is from memory: no notes, and nothing to rewrite mid-test. */}
         {!test && (
           <>
-            <Button variant="ghost" size="icon" onClick={() => setRewriteOpen(true)} title="Rewrite this topic">
+            <Button variant="ghost" size="icon" className="desktop-only" onClick={() => setRewriteOpen(true)} title="Rewrite this topic">
               <RefreshCw className="size-5" />
             </Button>
             <Button variant="ghost" size="icon" onClick={() => setNotesOpen(true)} title="All notes so far">
@@ -317,7 +329,7 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
         )}
       </div>
 
-      <div className="mx-auto mt-7 w-full max-w-[860px] flex-1">
+      <div className={cx('mx-auto w-full max-w-[860px] flex-1', IS_MOBILE ? 'mt-4' : 'mt-7')}>
         {step.kind === 'notes' && <NotesStep key={at} section={content.sections[step.section]} first={step.section === 0} goal={content.goal} onNext={next} onAsk={() => askAbout(content.sections[step.section])} />}
 
         {step.kind === 'cards' && <CardsStep key={at} cards={content.sections[step.section].cards ?? []} section={content.sections[step.section]} topicId={topic.id} onNext={next} onBack={back} />}

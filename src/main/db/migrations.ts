@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { SYNC_SCHEMA_SQL } from '@shared/syncTables'
 
 // Each entry runs once, in order. user_version tracks how many have run.
 export const MIGRATIONS: string[] = [
@@ -245,7 +246,8 @@ export const MIGRATIONS: string[] = [
   /* 5: each course gets a deck folder, with a deck per week */ `
   ALTER TABLE courses ADD COLUMN deck_folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL;
   ALTER TABLE weeks ADD COLUMN deck_id TEXT REFERENCES decks(id) ON DELETE SET NULL;
-  `
+  `,
+  /* 6: syncing with the phone app (change log filled by triggers) */ SYNC_SCHEMA_SQL
 ]
 
 export function migrate(db: Database.Database): number {

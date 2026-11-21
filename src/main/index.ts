@@ -9,7 +9,8 @@ import { backupOnUpgrade } from './upgradeBackup'
 import { seedPresets } from './ai/presets'
 import { aiQueue } from './ai'
 import { detectClaude, setOverridePath } from './ai/claudePath'
-import { registerIpc, broadcast, setAfterCall, refreshPlanUsage } from './ipc'
+import { registerIpc, broadcast, setAfterCall, refreshPlanUsage, runHandler } from './ipc'
+import { configureSyncServer, startSyncServer, stopSyncServer } from './sync/server'
 import { buildMenu } from './menu'
 import { loadWindowState, trackWindowState } from './windowState'
 import { onJobEvent, runningJobCount, setUsageProbe } from './jobs'
@@ -260,6 +261,17 @@ app.whenReady().then(async () => {
     if (channel === 'settings.set') nativeTheme.themeSource = repo.getSetting<'system' | 'light' | 'dark'>('ui.theme', 'system')
   })
   buildMenu(sendMenu)
+
+  // Phone sync: phones run AI and other desktop-only work through the same handlers.
+  configureSyncServer({
+    rpc: runHandler,
+    onSynced: (received) => {
+      broadcast({ type: 'sync', received })
+      if (received) updateBadge()
+    }
+  })
+  if (repo.getSetting<boolean>('sync.enabled', false)) void startSyncServer()
+  app.on('before-quit', () => void stopSyncServer())
 
   onJobEvent((ev) => {
     if (ev.type === 'delta') {

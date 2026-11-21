@@ -316,7 +316,7 @@ function Panel({ open, closing }: { open: ExplainOpen; closing: boolean }) {
           <Button size="sm" variant="soft" onClick={makeCards} disabled={!lastText}>
             Make cards from this
           </Button>
-          <span className="ml-auto hidden text-[0.75rem] text-muted sm:inline">
+          <span className="desktop-only ml-auto hidden text-[0.75rem] text-muted sm:inline">
             <Kbd>{keyLabel("⌥1")}</Kbd>–<Kbd>{keyLabel("⌥5")}</Kbd> quick asks
           </span>
         </div>

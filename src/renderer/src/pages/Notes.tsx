@@ -33,6 +33,7 @@ import {
 import type { Note, Folder, CustomAction } from '@shared/types'
 import { NOTE_TYPES } from '@shared/types'
 import { useStore, toast } from '../lib/store'
+import { IS_MOBILE } from '../lib/platform'
 import { api, onEvent, streamCall, errorText } from '../lib/api'
 import { folderPath, folderTree, groupByFolderTree, useCollapsedFolders, withSubfolders, type TreeGroup } from '../lib/collapsed'
 import { useCommands, runCommand } from '../lib/commands'
@@ -140,8 +141,15 @@ export function Notes({ noteId }: { noteId: string | null }) {
 
   return (
     <div className="flex h-full">
-      <aside className={cx('flex shrink-0 flex-col overflow-hidden border-r border-line transition-[width,opacity] duration-500 ease-out-soft max-md:hidden', rail ? 'w-[290px] opacity-100' : 'w-0 opacity-0')}>
-        <div className="flex w-[290px] flex-col gap-2 p-4 pb-2">
+      {/* Narrow screens (and the phone): the list fills the screen until a note is open. */}
+      <aside
+        className={cx(
+          'flex shrink-0 flex-col overflow-hidden border-r border-line transition-[width,opacity] duration-500 ease-out-soft',
+          rail ? 'w-[290px] opacity-100' : 'w-0 opacity-0',
+          noteId ? 'max-md:hidden' : 'max-md:w-full max-md:border-r-0 max-md:opacity-100'
+        )}
+      >
+        <div className="flex w-[290px] flex-col gap-2 p-4 pb-2 max-md:w-full">
           <div className="flex gap-2">
             <Button variant="primary" size="sm" className="flex-1 justify-center" onClick={() => runCommand('note.new')}>
               New note
@@ -149,7 +157,7 @@ export function Notes({ noteId }: { noteId: string | null }) {
             <Button size="sm" onClick={() => runCommand('gen.notes')} title={keyLabel("Generate notes with AI (⇧⌘G)")}>
               AI
             </Button>
-            <Button size="icon" variant="ghost" onClick={() => runCommand('io.importNotes')} title={keyLabel("Import Markdown / Notion (⌥⌘I)")}>
+            <Button size="icon" variant="ghost" className="desktop-only" onClick={() => runCommand('io.importNotes')} title={keyLabel("Import Markdown / Notion (⌥⌘I)")}>
               <Upload className="size-4" />
             </Button>
           </div>
@@ -158,7 +166,7 @@ export function Notes({ noteId }: { noteId: string | null }) {
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter notes…" className="h-9 pl-9 text-[0.9rem]" />
           </div>
         </div>
-        <div className="flex w-[290px] flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-4">
+        <div className="flex w-[290px] flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-4 max-md:w-full">
           <div className="mt-1 mb-1 flex items-center justify-between px-2 text-[0.72rem] font-semibold text-muted">
             Folders
             <button
@@ -224,7 +232,7 @@ export function Notes({ noteId }: { noteId: string | null }) {
           </div>
         </div>
       </aside>
-      <div className="min-w-0 flex-1 overflow-y-auto">
+      <div className={cx('min-w-0 flex-1 overflow-y-auto', !noteId && 'max-md:hidden')}>
         {noteId ? (
           <NoteEditor key={noteId} id={noteId} writingJobId={writing?.id ?? null} folders={folders} onChanged={load} />
         ) : (
@@ -258,7 +266,8 @@ function NoteEditor({ id, writingJobId, folders, onChanged }: { id: string; writ
   const openExplain = useStore((s) => s.openExplain)
   const [note, setNote] = useState<Note | null>(null)
   const [content, setContent] = useState('')
-  const [view, setView] = useState<View>(() => (localStorage.getItem('sw.noteView') as View) || 'split')
+  // On the phone a note opens to read; side by side doesn't fit.
+  const [view, setView] = useState<View>(() => (IS_MOBILE ? 'preview' : (localStorage.getItem('sw.noteView') as View) || 'split'))
   const [saved, setSaved] = useState(true)
   const [streamText, setStreamText] = useState('')
   const [sel, setSel] = useState<{ from: number; to: number; text: string; top: number; left: number } | null>(null)
@@ -281,7 +290,7 @@ function NoteEditor({ id, writingJobId, folders, onChanged }: { id: string; writ
     void api.actions.list().then((a) => setActions(a.filter((x) => x.placements.includes('note_selection'))))
     void api.decks.list().then(setDecks)
   }, [load])
-  useEffect(() => localStorage.setItem('sw.noteView', view), [view])
+  useEffect(() => void (!IS_MOBILE && localStorage.setItem('sw.noteView', view)), [view])
 
   // Live text while AI writes this note.
   useEffect(() => {
@@ -434,7 +443,7 @@ function NoteEditor({ id, writingJobId, folders, onChanged }: { id: string; writ
             onChange={setView}
             options={[
               { value: 'edit', label: <PenLine className="size-4" /> },
-              { value: 'split', label: <Columns2 className="size-4" /> },
+              ...(IS_MOBILE ? [] : [{ value: 'split' as const, label: <Columns2 className="size-4" /> }]),
               { value: 'preview', label: <Eye className="size-4" /> }
             ]}
           />
@@ -456,10 +465,10 @@ function NoteEditor({ id, writingJobId, folders, onChanged }: { id: string; writ
                 <MenuItem kbd="ai.explain" onClick={() => (close(), runCommand('ai.explain'))}>
                   Explain this note
                 </MenuItem>
-                <MenuItem kbd="io.exportNote" onClick={() => (close(), void exportAs('obsidian'))}>
+                <MenuItem desktopOnly kbd="io.exportNote" onClick={() => (close(), void exportAs('obsidian'))}>
                   Export for Obsidian
                 </MenuItem>
-                <MenuItem onClick={() => (close(), void exportAs('notion'))}>Export for Notion</MenuItem>
+                <MenuItem desktopOnly onClick={() => (close(), void exportAs('notion'))}>Export for Notion</MenuItem>
                 <MenuItem
                   onClick={async () => {
                     close()

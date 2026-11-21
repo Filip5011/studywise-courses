@@ -25,6 +25,7 @@ import { TASK_INFO, TASKS, MODEL_ALIASES, EFFORT_LEVELS, OLLAMA_EFFORT_LEVELS, o
 import { OllamaModelOptions, useOllamaModels } from '../components/OllamaModels'
 import { DEFAULT_THRESHOLDS } from '@shared/types'
 import { useStore, toast } from '../lib/store'
+import { IS_MOBILE } from '../lib/platform'
 import { api, errorText } from '../lib/api'
 import { useCommands, runCommand } from '../lib/commands'
 import { confirmDialog, chooseDialog, askText } from '../lib/dialogs'
@@ -209,19 +210,19 @@ export function DeckPage({ id, focusCardId }: { id: string; focusCardId?: string
                   <MenuItem kbd="gen.cards" onClick={() => (close(), runCommand('gen.cards'))}>
                     Generate cards with AI
                   </MenuItem>
-                  <MenuItem kbd="io.importCards" onClick={() => (close(), importInto())}>
+                  <MenuItem desktopOnly kbd="io.importCards" onClick={() => (close(), importInto())}>
                     Import cards (.txt .xlsx .csv .json .apkg)
                   </MenuItem>
-                  <MenuItem kbd="io.exportTxt" onClick={() => (close(), exportAs('txt'))}>
+                  <MenuItem desktopOnly kbd="io.exportTxt" onClick={() => (close(), exportAs('txt'))}>
                     Export StudySmarter text
                   </MenuItem>
-                  <MenuItem kbd="io.exportXlsx" onClick={() => (close(), exportAs('xlsx'))}>
+                  <MenuItem desktopOnly kbd="io.exportXlsx" onClick={() => (close(), exportAs('xlsx'))}>
                     Export StudySmarter Excel
                   </MenuItem>
-                  <MenuItem onClick={() => (close(), exportAs('json'))}>
+                  <MenuItem desktopOnly onClick={() => (close(), exportAs('json'))}>
                     Export JSON
                   </MenuItem>
-                  <MenuItem onClick={() => (close(), exportAs('csv'))}>
+                  <MenuItem desktopOnly onClick={() => (close(), exportAs('csv'))}>
                     Export CSV
                   </MenuItem>
                   <MenuItem kbd="learn.settings" onClick={() => (close(), setSettingsOpen(true))}>
@@ -279,7 +280,7 @@ export function DeckPage({ id, focusCardId }: { id: string; focusCardId?: string
         <div className="sticky top-0 z-10 -mx-2 mb-3 flex flex-wrap items-center gap-2 bg-bg/85 px-2 py-2 backdrop-blur">
           <div className="relative min-w-[200px] flex-1">
             <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted" />
-            <Input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={keyLabel(`Search ${cards.length} cards…  (⌘F)`)} className="pl-10" onKeyDown={(e) => e.key === 'Escape' && (e.currentTarget.blur(), setQ(''))} />
+            <Input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={IS_MOBILE ? `Search ${cards.length} cards…` : keyLabel(`Search ${cards.length} cards…  (⌘F)`)} className="pl-10" onKeyDown={(e) => e.key === 'Escape' && (e.currentTarget.blur(), setQ(''))} />
           </div>
           {selected.size > 0 ? (
             <div className="pop-in flex items-center gap-2">
@@ -320,7 +321,7 @@ export function DeckPage({ id, focusCardId }: { id: string; focusCardId?: string
                 Generate with AI
               </Button>
               <Button onClick={() => runCommand('card.new')}>Add a card</Button>
-              <Button onClick={importInto}>Import</Button>
+              <Button className="desktop-only" onClick={importInto}>Import</Button>
             </div>
           </Empty>
         ) : (

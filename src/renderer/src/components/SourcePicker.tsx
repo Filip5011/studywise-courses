@@ -59,7 +59,7 @@ export function SourcePicker({ value, onChange, tab, setTab }: { value: SourceVa
             addFiles([...e.dataTransfer.files].map((f) => window.studywise.pathForFile(f)))
           }}
           className={cx(
-            'flex flex-col gap-3 rounded-xl border-2 border-dashed p-5 transition-colors duration-300',
+            'desktop-only flex flex-col gap-3 rounded-xl border-2 border-dashed p-5 transition-colors duration-300',
             over ? 'border-accent bg-accent-soft' : 'border-line bg-surface'
           )}
         >

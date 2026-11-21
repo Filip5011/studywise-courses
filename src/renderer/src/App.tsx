@@ -29,6 +29,8 @@ import { Courses, NewCourseModal } from './pages/Courses'
 import { JobDock } from './components/JobLive'
 import { CoursePage } from './pages/Course'
 import { WeekPage } from './pages/Week'
+import { IS_MOBILE } from './lib/platform'
+import { MobileTopBar, MobileTabBar, MobileOnboarding, STUDY_ROUTES } from './components/MobileShell'
 
 const Learn = lazy(() => import('./pages/Learn').then((m) => ({ default: m.Learn })))
 const TopicPage = lazy(() => import('./pages/Topic').then((m) => ({ default: m.TopicPage })))
@@ -113,6 +115,8 @@ export function App() {
         const st = useStore.getState()
         if (ev.type === 'fullscreen') document.documentElement.classList.toggle('is-fullscreen', ev.on)
         if (ev.type === 'claude:status') st.setClaude(ev.status)
+        // Another device synced changes into this library: show them.
+        if (ev.type === 'sync' && ev.received) st.bump()
         if (ev.type === 'open-files') openFiles(ev.paths)
         if (ev.type === 'job') {
           const j = ev.job
@@ -343,14 +347,16 @@ export function App() {
 
   const pageKey = `${route.name}:${(route as { id?: string; deckId?: string }).id ?? (route as { deckId?: string }).deckId ?? ''}`
 
+  const studying = IS_MOBILE && STUDY_ROUTES.includes(route.name)
   return (
     <div className="flex h-full flex-col">
-      {!focus && <GooNav />}
-      {focus && <div className="drag h-9 shrink-0" />}
-      <SetupBanner />
-      <UpdateBanner />
+      {IS_MOBILE ? !studying && <MobileTopBar /> : !focus && <GooNav />}
+      {IS_MOBILE && studying && <div className="mobile-safe-top shrink-0" />}
+      {!IS_MOBILE && focus && <div className="drag h-9 shrink-0" />}
+      {!IS_MOBILE && <SetupBanner />}
+      {!IS_MOBILE && <UpdateBanner />}
       <main className="relative min-h-0 flex-1">
-        <div key={pageKey} className="page-in absolute inset-0 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
+        <div key={pageKey} className={cx('page-in absolute inset-0 overflow-y-auto', !IS_MOBILE && '[scrollbar-gutter:stable_both-edges]')}>
           {!ready ? (
             <div className="grid h-full place-items-center">
               <Spinner className="size-6 text-muted" />
@@ -362,6 +368,8 @@ export function App() {
           )}
         </div>
       </main>
+      {IS_MOBILE && !studying && <MobileTabBar />}
+      {IS_MOBILE && studying && <div className="mobile-safe-bottom shrink-0" />}
       <ExplainPanel />
       <GenerateCardsModal />
       <GenerateNotesModal />
@@ -373,8 +381,8 @@ export function App() {
       <DialogHost />
       <DropChooser />
       <Toasts />
-      {onboarding && <Onboarding onDone={() => setOnboarding(false)} />}
-      {dragging && (
+      {onboarding && (IS_MOBILE ? <MobileOnboarding onDone={() => setOnboarding(false)} /> : <Onboarding onDone={() => setOnboarding(false)} />)}
+      {dragging && !IS_MOBILE && (
         <div className="fade-in pointer-events-none fixed inset-3 z-[70] grid place-items-center rounded-xl border-4 border-dashed border-accent bg-accent-soft/80 backdrop-blur-sm">
           <div className="pop-in flex flex-col items-center gap-3 text-center">
             <FileUp className="size-12 text-accent" />
@@ -637,7 +645,7 @@ function Toasts() {
     <div
       className={cx(
         'pointer-events-none fixed right-4 left-4 z-[80] flex flex-col items-center gap-2',
-        top ? 'top-[calc(var(--nav-h)+12px)]' : 'bottom-4 sm:left-auto sm:items-end'
+        top ? 'top-[calc(var(--nav-h)+12px)]' : IS_MOBILE ? 'bottom-[calc(var(--tab-h)+12px)]' : 'bottom-4 sm:left-auto sm:items-end'
       )}
     >
       {toasts.map((t) => (

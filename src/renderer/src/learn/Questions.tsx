@@ -105,7 +105,7 @@ export function MultipleChoice({ q, mark, answer, onAnswer, disabled }: QProps<'
           )
         })}
       </div>
-      {!disabled && <div className="text-[0.82rem] text-muted">Press <Kbd>1</Kbd>–<Kbd>4</Kbd> or <Kbd>A</Kbd>–<Kbd>D</Kbd></div>}
+      {!disabled && <div className="desktop-only text-[0.82rem] text-muted">Press <Kbd>1</Kbd>–<Kbd>4</Kbd> or <Kbd>A</Kbd>–<Kbd>D</Kbd></div>}
     </div>
   )
 }
