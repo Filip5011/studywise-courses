@@ -525,3 +525,50 @@ describe('exam dates', () => {
     expect(svc.setExamDate(c.id, null).exam_date).toBeNull()
   })
 })
+
+describe('more kinds of week files', () => {
+  it('reads web pages and RTF as text, and takes pictures as files for Claude to look at', async () => {
+    const files = await import('../../src/main/files')
+    expect(files.htmlToText('<html><style>p{}</style><h1>Pipelines</h1><p>Fetch &amp; decode</p><ul><li>one</li><li>two</li></ul><script>x()</script></html>')).toBe('Pipelines\n\nFetch & decode\n\n- one\n\n- two')
+    expect(files.rtfToText('{\\rtf1\\ansi{\\fonttbl\\f0 Arial;}\\f0\\fs24 Hazards\\par Data and control\\par}')).toBe('Hazards\nData and control')
+    const c = svc.createCourse({ name: 'File types', level: '' })
+    const w = svc.addWeek(c.id, 'Week 1')
+    const png = join(dir, 'whiteboard.png')
+    writeFileSync(png, Buffer.from('89504e470d0a1a0a', 'hex'))
+    const page = join(dir, 'reading.html')
+    writeFileSync(page, '<p>Forwarding</p>')
+    const added = await svc.addFiles(w.id, [png, page, join(dir, 'notes.key')])
+    expect(added.map((f) => f.name)).toEqual(['whiteboard.png', 'reading.html'])
+  })
+})
+
+describe('dropping a shared week into an existing week', () => {
+  it('adds its topics after the week’s own, numbered on, with their cards', async () => {
+    const share = await import('../../src/main/services/weekShare')
+    const repo = await import('../../src/main/db/repo')
+    // A friend's written week.
+    const src = svc.createCourse({ name: 'Friend', level: '' })
+    const fw = svc.addWeek(src.id, 'Week 1')
+    await svc.addFiles(fw.id, [resolve('tests/fixtures/photoelectric-lecture.pdf')])
+    await svc.planWeek(fw.id, ctx())
+    await svc.writeTopic(svc.listTopics(src.id)[0].id, ctx())
+    const file = join(dir, 'merge.studyweek')
+    await share.exportWeek(fw.id, file)
+    // My week 2 already has its own three planned topics.
+    const mine = svc.createCourse({ name: 'Mine', level: '' })
+    svc.addWeek(mine.id, 'Week 1')
+    const w2 = svc.addWeek(mine.id, 'Week 2')
+    await svc.addFiles(w2.id, [resolve('tests/fixtures/photoelectric-lecture.pdf')])
+    await svc.planWeek(w2.id, ctx())
+    const r = await share.importWeek(file, { weekId: w2.id })
+    expect(r.weekId).toBe(w2.id)
+    const topics = svc.listTopics(mine.id).filter((t) => t.week_id === w2.id)
+    expect(topics.map((t) => t.key)).toEqual(['w2t1', 'w2t2', 'w2t3', 'w2t4', 'w2t5', 'w2t6'])
+    expect(topics.filter((t) => t.status === 'ready').map((t) => t.key)).toEqual(['w2t4'])
+    // The friend's topic that built on their t1 now points at its new number here.
+    expect(topics[4].plan.needs).toEqual(['w2t4'])
+    expect(repo.listCards(svc.getCourse(mine.id).weeks[1].deck_id!).length).toBe(r.cards)
+    // Same file name as the week's own: numbered, not overwritten.
+    expect(svc.listFiles(mine.id).filter((f) => f.week_id === w2.id).map((f) => f.name)).toEqual(['photoelectric-lecture.pdf', 'photoelectric-lecture (2).pdf'])
+  })
+})

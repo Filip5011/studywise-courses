@@ -85,11 +85,49 @@ function decodeXml(s: string): string {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
 }
 
+/** Pictures of slides, whiteboards or handouts: Claude looks at them, there's no text to extract. */
+export const IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
+export const isImageFile = (f: string) => IMAGE_EXT.includes(extname(f).toLowerCase())
+
+/** Readable text from a web page: no tags, scripts or styles, entities decoded, paragraphs kept. */
+export function htmlToText(html: string): string {
+  return decodeXml(
+    html
+      .replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|li|h[1-6]|tr|section|article)>/gi, '\n\n')
+      .replace(/<li[^>]*>/gi, '- ')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&#(\d+);/g, (_, n: string) => String.fromCharCode(Number(n)))
+  )
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/** Plain text from RTF: control words and groups dropped, paragraphs kept. */
+export function rtfToText(rtf: string): string {
+  return rtf
+    // Settings, not text: font and colour tables, styles, document info, pictures.
+    .replace(/\{\\(?:fonttbl|colortbl|stylesheet|info|pict|header|footer)(?:[^{}]|\{[^{}]*\})*\}/g, '')
+    .replace(/\\par[d]?\b ?/g, '\n')
+    .replace(/\\'([0-9a-f]{2})/gi, (_, h: string) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/\{\\\*[^{}]*\}/g, '')
+    .replace(/\\[a-z]+-?\d* ?/gi, '')
+    .replace(/[{}]/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 export async function extractText(file: string): Promise<string> {
   const ext = extname(file).toLowerCase()
   if (ext === '.pdf') return extractPdfText(file)
   if (ext === '.docx') return extractDocxText(file)
   if (ext === '.pptx') return extractPptxText(file)
+  if (ext === '.html' || ext === '.htm') return htmlToText(readFileSync(file, 'utf8'))
+  if (ext === '.rtf') return rtfToText(readFileSync(file, 'utf8'))
+  if (isImageFile(file)) return ''
   return readFileSync(file, 'utf8')
 }
 

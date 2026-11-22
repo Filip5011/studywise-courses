@@ -44,3 +44,40 @@ export async function shareWeek(weekId: string): Promise<void> {
     toast(errorText(e), 'bad')
   }
 }
+
+/** What a week takes: slides, transcripts, readings, pictures of slides or the whiteboard. */
+export const WEEK_SOURCE = /\.(pdf|docx|pptx|txt|md|markdown|vtt|srt|html?|rtf|csv|png|jpe?g|webp|gif)$/i
+
+/**
+ * Files dropped on a week's page: sources are added to the week like Add files,
+ * and a shared .studyweek is merged into it (its topics, cards and files join
+ * this week's) after a confirm.
+ */
+export async function dropOnWeek(weekId: string, weekLabel: string, paths: string[]): Promise<void> {
+  const shared = paths.filter((p) => /\.studyweek$/i.test(p))
+  const sources = paths.filter((p) => WEEK_SOURCE.test(p))
+  const skipped = paths.length - shared.length - sources.length
+  try {
+    if (sources.length) {
+      await api.courses.addFiles({ weekId, files: sources })
+      toast(`Added ${sources.length} file${sources.length === 1 ? '' : 's'} to ${weekLabel}${skipped ? ` (${skipped} skipped: that kind of file can’t be read)` : ''}. Plan the week again to use them.`, 'good')
+    } else if (skipped && !shared.length) {
+      toast('That kind of file can’t be added to a week. Try PDF, Word, PowerPoint, text, Markdown, a web page, RTF, CSV or a picture.', 'bad')
+    }
+    for (const file of shared) {
+      const p = await api.courses.previewWeek({ file })
+      if (!p) continue
+      const ok = await confirmDialog(
+        `Add “${p.week}” from ${p.course} into ${weekLabel}?`,
+        `Its ${p.topics} topic${p.topics === 1 ? '' : 's'} (${p.written} written), ${p.cards} recall card${p.cards === 1 ? '' : 's'} and ${p.files.length} file${p.files.length === 1 ? '' : 's'} join this week's, after its own topics. Nothing is generated, so it costs no tokens.`,
+        { confirmText: 'Add to this week' }
+      )
+      if (!ok) continue
+      const r = await api.courses.importWeek({ file: p.file, courseId: null, weekId })
+      toast(`Added ${r.topics} topic${r.topics === 1 ? '' : 's'} and ${r.cards} card${r.cards === 1 ? '' : 's'} to ${weekLabel}`, 'good')
+    }
+  } catch (e) {
+    toast(errorText(e), 'bad')
+  }
+  useStore.getState().bump()
+}

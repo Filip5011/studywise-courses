@@ -187,6 +187,11 @@ export async function filesForOllama(files: string[], vision: boolean): Promise<
       } finally {
         await parser.destroy()
       }
+    } else if (['.png', '.jpg', '.jpeg', '.webp', '.gif'].includes(extname(f).toLowerCase())) {
+      // A picture of a slide or the whiteboard: only a vision model can read it.
+      if (!vision) throw new CliError(`${name} is a picture. Pick an Ollama model with vision (it shows a "vision" tag in Settings → Models) to read it.`, 'failed')
+      images.push(readFileSync(f).toString('base64'))
+      blocks.push(`<file name="${name}">\n(A picture, attached as image ${images.length}.)\n</file>`)
     } else {
       const { extractText } = await import('../files')
       blocks.push(`<file name="${name}">\n${await extractText(f)}\n</file>`)

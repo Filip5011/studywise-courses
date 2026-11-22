@@ -113,12 +113,19 @@ export async function previewWeek(file: string): Promise<WeekPreview> {
  * Adds a shared week to one of your courses (as its next week), or to a new
  * course named like the sender's. Returns where it went.
  */
-export async function importWeek(file: string, target: { courseId: string } | { newCourse: true }): Promise<{ courseId: string; weekId: string; topics: number; cards: number }> {
+export async function importWeek(
+  file: string,
+  target: { courseId: string } | { newCourse: true } | { weekId: string }
+): Promise<{ courseId: string; weekId: string; topics: number; cards: number }> {
   const { zip, json } = await readWeek(file)
   const d = getDb()
 
-  const courseId =
-    'courseId' in target
+  // Into an existing week: its topics, files and cards join that week's.
+  const into = 'weekId' in target ? (d.prepare('SELECT * FROM weeks WHERE id = ?').get(target.weekId) as Row | undefined) : undefined
+  if ('weekId' in target && !into) throw new Error('Week not found')
+  const courseId = into
+    ? String(into.course_id)
+    : 'courseId' in target
       ? target.courseId
       : (() => {
           const c = createCourse({ name: json.course.name || 'Shared course', level: json.course.level })
@@ -127,13 +134,20 @@ export async function importWeek(file: string, target: { courseId: string } | { 
         })()
   const course = getCourse(courseId)
 
-  // The week lands at the end of your course, under its own label (numbered if you already have one by that name).
-  const labels = new Set(course.weeks.map((w) => w.label.toLowerCase()))
-  let label = String(json.week.label || 'Shared week')
-  for (let n = 2; labels.has(label.toLowerCase()); n++) label = `${json.week.label} (${n})`
-  const week = addWeek(courseId, label)
-  const status = json.week.status === 'planning' ? 'error' : String(json.week.status ?? 'empty')
-  d.prepare('UPDATE weeks SET status = ?, error = ?, outline = ? WHERE id = ?').run(status, status === 'error' ? 'Planning was interrupted. Plan it again.' : (json.week.error ?? null), json.week.outline ?? null, week.id)
+  let week: { id: string; position: number }
+  if (into) {
+    week = { id: String(into.id), position: Number(into.position) }
+    // An empty week takes the shared week's state; one with its own topics keeps its own.
+    if (into.status === 'empty' && json.week.status === 'ready') d.prepare("UPDATE weeks SET status = 'ready', error = NULL, outline = COALESCE(outline, ?) WHERE id = ?").run(json.week.outline ?? null, week.id)
+  } else {
+    // The week lands at the end of your course, under its own label (numbered if you already have one by that name).
+    const labels = new Set(course.weeks.map((w) => w.label.toLowerCase()))
+    let label = String(json.week.label || 'Shared week')
+    for (let n = 2; labels.has(label.toLowerCase()); n++) label = `${json.week.label} (${n})`
+    week = addWeek(courseId, label)
+    const status = json.week.status === 'planning' ? 'error' : String(json.week.status ?? 'empty')
+    d.prepare('UPDATE weeks SET status = ?, error = ?, outline = ? WHERE id = ?').run(status, status === 'error' ? 'Planning was interrupted. Plan it again.' : (json.week.error ?? null), json.week.outline ?? null, week.id)
+  }
 
   // New ids for everything in the file, and the sender's course and week become yours.
   const remap = new Map<string, string>([
@@ -143,15 +157,29 @@ export async function importWeek(file: string, target: { courseId: string } | { 
   for (const r of [...json.files, ...json.topics, ...json.cards]) if (typeof r.id === 'string') remap.set(r.id.toLowerCase(), randomUUID())
   const swap = (s: string) => s.replace(UUID, (m) => remap.get(m.toLowerCase()) ?? m)
 
-  // Topic keys follow the week's position here (w3t1 becomes w5t1 as your week 5).
-  const oldNo = String(json.topics[0]?.key ?? '').match(/^w(\d+)t/)?.[1]
-  const newNo = String(week.position + 1)
-  const rekey = (s: string) => (oldNo ? s.replace(new RegExp(`"w${oldNo}(t\\d+)"`, 'g'), `"w${newNo}$1"`) : s)
+  // Topic keys follow the week's position here (w3t1 becomes w5t1 as your week 5), and
+  // carry on after the week's own topics when it already has some (t5, t6, …).
+  const newNo = week.position + 1
+  const existing = d.prepare('SELECT key, position FROM topics WHERE week_id = ?').all(week.id) as { key: string; position: number }[]
+  const lastT = Math.max(0, ...existing.map((t) => Number(t.key.match(/t(\d+)$/)?.[1] ?? 0)))
+  const lastPos = Math.max(-1, ...existing.map((t) => t.position))
+  const keyMap = new Map<string, string>()
+  ;[...json.topics]
+    .sort((a, b) => Number(a.position) - Number(b.position))
+    .forEach((t, i) => {
+      const own = String(t.key).match(/t(\d+)$/)?.[1]
+      keyMap.set(String(t.key), `w${newNo}t${existing.length ? lastT + i + 1 : (own ?? i + 1)}`)
+    })
+  // Keys appear as "w3t1" in rows, and as \"w3t1\" inside each topic's plan (JSON stored as text).
+  const rekey = (s: string) => s.replace(/(\\?")(w\d+t\d+)(\\?")/g, (m, q1: string, k: string, q2: string) => (keyMap.has(k) ? `${q1}${keyMap.get(k)}${q2}` : m))
 
   const files = JSON.parse(swap(JSON.stringify(json.files))) as Row[]
   const topics = JSON.parse(rekey(swap(JSON.stringify(json.topics)))) as Row[]
   const cards = JSON.parse(swap(JSON.stringify(json.cards))) as Row[]
-  if (oldNo) for (const t of topics) t.key = String(t.key).replace(new RegExp(`^w${oldNo}t`), `w${newNo}t`)
+  for (const t of topics) {
+    // rekey already renamed the key field itself; a merged week's topics go after its own.
+    if (existing.length) t.position = lastPos + 1 + Number(t.position)
+  }
 
   // Files go in your course's folder; a name you already have gets a number, and topics follow the rename.
   const taken = new Set(course.weeks.flatMap((w) => w.files.map((f) => f.name.toLowerCase())))

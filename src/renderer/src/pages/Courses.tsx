@@ -99,7 +99,7 @@ export function FileDrop({ list, setList }: { list: string[]; setList: (f: strin
   )
 }
 
-const ACCEPT = /\.(pdf|docx|pptx|txt|md|markdown|vtt|srt)$/i
+const ACCEPT = /\.(pdf|docx|pptx|txt|md|markdown|vtt|srt|html?|rtf|csv|png|jpe?g|webp|gif)$/i
 
 export function NewCourseModal() {
   const files = useStore((s) => s.newCourse)

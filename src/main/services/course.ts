@@ -7,7 +7,7 @@ import { withPointCount } from '@shared/ssText'
 import * as repo from '../db/repo'
 import { runAI } from '../ai'
 import { paths } from '../paths'
-import { extractText, pdfPageCount } from '../files'
+import { extractText, pdfPageCount, IMAGE_EXT, isImageFile } from '../files'
 import type { JobContext } from '../jobs'
 import { thresholdsFor } from './learn'
 import { planTracker, topicTracker } from './liveProgress'
@@ -44,7 +44,7 @@ import {
 // A course is a run of weeks. Each week has its own files; its topics are
 // planned from those files only, knowing what earlier weeks already cover.
 
-export const COURSE_SOURCE_EXT = ['.pdf', '.docx', '.pptx', '.txt', '.md', '.markdown', '.vtt', '.srt']
+export const COURSE_SOURCE_EXT = ['.pdf', '.docx', '.pptx', '.txt', '.md', '.markdown', '.vtt', '.srt', '.html', '.htm', '.rtf', '.csv', ...IMAGE_EXT]
 
 /** Above this much text, a week is planned one file at a time and merged. */
 const ONE_CALL_CHARS = 300_000
@@ -484,6 +484,8 @@ async function pdfPagesText(file: string): Promise<{ num: number; text: string }
 
 /** Text of a file for the prompt; PDFs get [page N] markers. Null for a PDF with no text layer. */
 async function fileText(f: CourseFile): Promise<string | null> {
+  // Pictures have no text: they're sent as files for Claude to look at.
+  if (isImageFile(f.name)) return null
   if (extname(f.name).toLowerCase() === '.pdf') {
     const pages = await pdfPagesText(f.path)
     const chars = pages.reduce((n, p) => n + p.text.trim().length, 0)
@@ -531,7 +533,8 @@ export async function planWeek(weekId: string, ctx: JobContext, instructions = '
     live({ stage: 'Sending them to Claude…', percent: 0.08, log: files.map((f) => `Read ${f.name}`) })
     const callFor = async (list: typeof texts, partInfo: string, from = 0.1, to = 0.95): Promise<CourseOutline> => {
       // PDFs without a text layer go in as files so Claude can look at the slides.
-      const attach = list.filter((t) => t.text === null && t.file.name.toLowerCase().endsWith('.pdf')).map((t) => t.file.path)
+      // Scanned PDFs and pictures go in as files so Claude can look at them.
+      const attach = list.filter((t) => t.text === null && (t.file.name.toLowerCase().endsWith('.pdf') || isImageFile(t.file.name))).map((t) => t.file.path)
       const source = list.filter((t) => t.text !== null).map((t) => fileBlock(t.file.name, t.text!.slice(0, ONE_CALL_CHARS))).join('\n\n')
       const r = await runAI<CourseOutline>({
         task: 'course_outline',
@@ -651,6 +654,11 @@ async function topicSources(files: CourseFile[], plan: OutlineTopic, work: strin
         continue
       }
       // Long PDF with no usable page range: send the text instead.
+    }
+    // A picture (a photo of a slide or the whiteboard) goes in for Claude to look at.
+    if (isImageFile(file.name)) {
+      attach.push(file.path)
+      continue
     }
     const text = await fileText(file).catch(() => null)
     if (text) blocks.push(fileBlock(file.name, text, where.join('; ')))
