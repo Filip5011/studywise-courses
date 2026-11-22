@@ -64,7 +64,7 @@ export function DesktopPhoneTab() {
           <Smartphone className="size-5" /> Sync with your phone
         </h3>
         <p className="text-[0.92rem] text-muted">
-          The Studywise Android app keeps its own copy of your decks, notes and courses, so you can study offline. When it can reach this computer it syncs both ways: progress, reviews and edits made on either side. AI features on the phone (Explain, marking, writing topics) run here, through your Claude login.
+          The Studywise phone app (Android or iPhone) keeps its own copy of your decks, notes and courses, so you can study offline. When it can reach this computer it syncs both ways: progress, reviews and edits made on either side. AI features on the phone (Explain, marking, writing topics) run here, through your Claude login.
         </p>
         <Toggle checked={s.enabled} disabled={busy} onChange={setEnabled} label="Let paired phones on this network sync" />
         {s.enabled && (

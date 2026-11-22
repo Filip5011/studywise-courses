@@ -142,6 +142,17 @@ The Android app (`src/mobile`, wrapped by Capacitor in `android/`) runs the same
 
 **Syncing.** Thirteen tables sync (folders, decks, cards, notes and their deck links, review state and history, learn sessions and answers, courses, weeks, course files and topics). Settings, prompts, AI logs and caches stay on each device. Triggers record every write to a synced table in `sync_log` with a sequence number, a timestamp and the device it came from, so no other code knows about syncing. The phone sends the rows it changed since the computer last saw its log, then applies the computer's rows changed since it last looked (leaving out the phone's own changes). When both changed the same row, the later change wins. Deletes and cascades travel the same way; a row whose parent was deleted on the other side is removed (or its link cleared, for `ON DELETE SET NULL`). The first sync sends the whole library. The phone syncs when it opens, when it comes back to the front, every minute, a few seconds after a change, and before and after anything it asks the computer to do.
 
+**iPhone.** The same phone app also builds for iOS (`ios/`, Swift Package Manager, no CocoaPods), with the Studywise icon made full-bleed and opaque for iOS (`npm run icons:ios`). Sync is plain HTTP to the computer on the local network: `Info.plist` allows that for local network addresses only (`NSAllowsLocalNetworking`; everything else still needs HTTPS), and the first sync makes iOS ask to use the local network. It syncs whenever it can reach the computer: when the app opens or comes back to the front, every minute while it's open, and a few seconds after a change. To put it on your iPhone:
+
+1. Install Xcode from the Mac App Store, open it once (accept the licence, let it install its components), then point the command-line tools at it: `sudo xcode-select -s /Applications/Xcode.app`.
+2. `npm run ios:open` builds the phone app and opens the project in Xcode.
+3. In Xcode, select the **App** target → **Signing & Capabilities** → **Team** → add your Apple ID (a free one works). If Xcode says the bundle identifier is taken, change `com.studywise.courses` to something of your own, like `com.yourname.studywise`.
+4. Plug in the iPhone (or have it on the same Wi-Fi), turn on Settings → Privacy & Security → **Developer Mode** on the phone, pick it as the run destination at the top of Xcode, and press ▶︎.
+5. The first time, the phone asks you to trust the developer: Settings → General → VPN & Device Management → your Apple ID → Trust.
+6. Pair it: Settings → Phone on the computer → Pair a phone, then Settings → Sync on the iPhone with the address and code; allow local network access when iOS asks.
+
+With a free Apple ID the app stops opening after 7 days; run it from Xcode again to renew it (your data stays on the phone and on the computer). A paid Apple Developer account ($99 a year) makes it last a year and allows TestFlight.
+
 **Pairing.** Settings → Phone on the computer turns on a small HTTP server on the local network (port 47821) and shows the computer's addresses. Pair a phone shows a 6-digit code that works once, for 10 minutes, and is cancelled after 5 wrong tries. The phone gets a token (the computer keeps only its hash); everything except saying hello and pairing needs it. Unpairing on either side stops syncing; the phone keeps its copy. The server never opens dialogs for the phone, and it won't run anything that touches files on the computer, backups, settings or the Ollama key.
 
 

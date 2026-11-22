@@ -24,6 +24,12 @@ export const emit = (ev: unknown) => listeners.forEach((l) => l(ev))
 phone.setEventSink(emit)
 
 const APP_VERSION = __APP_VERSION__
+/** Which phone app this is: Android, iPhone/iPad, or the page in a browser. */
+const PLATFORM: MobileApi['platform'] = (() => {
+  const cap = (window as unknown as { Capacitor?: { isNativePlatform(): boolean; getPlatform(): string } }).Capacitor
+  if (!cap?.isNativePlatform()) return 'web'
+  return cap.getPlatform() === 'ios' ? 'ios' : 'android'
+})()
 
 const noUpdates: UpdateStatus = { supported: false, behind: 0, ahead: 0, dirty: false, branch: null, changes: [], state: 'idle', stage: null, error: null, checkedAt: null }
 const claudeHere: ClaudeStatus = { path: 'computer', version: null, loggedIn: true, authMethod: null, error: null, overridePath: null, mock: true }
@@ -33,7 +39,7 @@ const remoteOr = async <T>(channel: string, input: unknown, fallback: T): Promis
 
 /** Channels answered on the phone. Anything not listed goes to the computer. */
 const local: Record<string, Fn> = {
-  'app.info': () => ({ version: APP_VERSION, name: 'Studywise', userData: 'On this phone', electron: '', mock: false, platform: 'android' }),
+  'app.info': () => ({ version: APP_VERSION, name: 'Studywise', userData: 'On this phone', electron: '', mock: false, platform: PLATFORM }),
   'app.openExternal': (i: { url: string }) => {
     if (!/^https:\/\//.test(i.url)) throw new Error('Only https links can be opened')
     window.open(i.url, '_blank')
@@ -166,7 +172,7 @@ export function installBackend(): void {
     pathForFile: () => ''
   }
   const mobileApi: MobileApi = {
-    platform: (window as unknown as { Capacitor?: { isNativePlatform(): boolean } }).Capacitor?.isNativePlatform() ? 'android' : 'web',
+    platform: PLATFORM,
     sync: {
       status: async () => phone.status(),
       pair: (i) => phone.pair(i.address, i.code),
