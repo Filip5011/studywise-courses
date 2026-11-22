@@ -1,5 +1,7 @@
-// Android integration: the back button, the status bar, and saving when the
-// app goes to the background.
+// Phone integration (Android and iPhone): the back button (Android only), the
+// status bar, saving when the app goes to the background and syncing when it
+// comes back. On iPhone the status bar always sits over the page (the layout
+// leaves room with the safe-area insets) and the Android-only calls just fail.
 
 import { Capacitor } from '@capacitor/core'
 import { App } from '@capacitor/app'

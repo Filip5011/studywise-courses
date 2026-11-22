@@ -9,3 +9,6 @@ export async function pdfPageCount(): Promise<never> {
 export async function prepareSources(): Promise<never> {
   throw new NeedsComputer()
 }
+// Plain helpers the course code uses; on the phone they only ever see file names.
+export const IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
+export const isImageFile = (f: string) => IMAGE_EXT.some((e) => f.toLowerCase().endsWith(e))

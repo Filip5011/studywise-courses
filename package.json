@@ -28,6 +28,9 @@
     "android:sync": "npm run mobile:build && cap sync android",
     "android:apk": "npm run android:sync && node scripts/android-build.mjs",
     "android:run": "npm run android:sync && cap run android",
+    "ios:sync": "npm run mobile:build && cap sync ios",
+    "ios:open": "npm run ios:sync && cap open ios",
+    "icons:ios": "electron scripts/make-ios-icon.cjs",
     "sync:demo": "cross-env TSX_TSCONFIG_PATH=tsconfig.node.json ELECTRON_RUN_AS_NODE=1 electron ./node_modules/tsx/dist/cli.mjs scripts/sync-demo.ts"
   },
   "dependencies": {
@@ -46,6 +49,7 @@
   "devDependencies": {
     "@capacitor/android": "^8.6.2",
     "@capacitor/cli": "^8.6.2",
+    "@capacitor/ios": "^8.6.2",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.13.1",
     "@codemirror/view": "^6.43.15",

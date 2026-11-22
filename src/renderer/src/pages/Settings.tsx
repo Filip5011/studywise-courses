@@ -44,7 +44,7 @@ import { Markdown } from '../components/Markdown'
 import { UsageBars } from '../components/UsageMeter'
 import { OllamaModelOptions, useOllamaModels } from '../components/OllamaModels'
 import { DesktopPhoneTab, MobileSyncTab } from '../components/PhoneSync'
-import { IS_MOBILE } from '../lib/platform'
+import { IS_MOBILE, mobile } from '../lib/platform'
 
 const DESKTOP_TABS = [
   { id: 'general', label: 'General', icon: Gear },
@@ -215,7 +215,7 @@ function General() {
           <Info className="size-5" /> About
         </h3>
         <p className="text-[0.92rem] text-muted">
-          Studywise {info?.version} {IS_MOBILE ? '· Android' : `· Electron ${info?.electron}`} {info?.mock && <Pill tone="warn">AI_MOCK on</Pill>}
+          Studywise {info?.version} {IS_MOBILE ? (mobile().platform === 'ios' ? '· iPhone' : mobile().platform === 'android' ? '· Android' : '· Web') : `· Electron ${info?.electron}`} {info?.mock && <Pill tone="warn">AI_MOCK on</Pill>}
         </p>
         <p className="text-[0.92rem] text-muted">
           {IS_MOBILE && 'On the phone, AI features run on your paired computer. '}AI features run through the Claude Code CLI on this computer with your own Claude subscription, or through Ollama if you switch to it under AI provider. Studywise never sees your Claude login. Use is subject to each provider’s terms.

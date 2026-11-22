@@ -16,7 +16,7 @@ export interface PhoneSyncStatus {
 }
 
 export interface MobileApi {
-  platform: 'android' | 'web'
+  platform: 'android' | 'ios' | 'web'
   sync: {
     status(): Promise<PhoneSyncStatus>
     /** Pair with a computer: its address (host or host:port) and the code it shows. */
