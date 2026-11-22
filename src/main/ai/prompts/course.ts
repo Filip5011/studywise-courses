@@ -135,7 +135,7 @@ Rules:
 == RECALL CARDS ==
 "cards": the few flashcards worth keeping for the exam, usually 4–8 for the whole topic (fewer for a short topic, never more than 10). I see each section's cards straight after its notes and before its questions, and they go into spaced repetition for the rest of the course, so every card has to earn its place. Each card must make sense completely on its own: no "according to the above" or "in this topic". Short "front", short "back".
 - Only what I'd be expected to recall in the exam: definitions of the key terms, key lists and steps, important contrasts, formulas, and anything the lecturer stressed.
-- No cards for examples, case studies, companies or people used as illustrations, analogies, "Imagine…" stories, history, side remarks, anything not examinable, or "wrong idea vs correct idea" (that belongs in the notes). One card per idea: don't ask the same thing two ways.
+- Pure content only. No cards for examples, case studies, scenarios, companies, products or people used as illustrations, analogies, "Imagine…" stories, history, side remarks, opinions, anything about the course, lecture, exam or admin, anything not examinable, or "wrong idea vs correct idea" (that belongs in the notes). One card per idea: don't ask the same thing two ways.
 - When the back is a list, use "- " bullets, one point per bullet, and end the front with the number of bullets in brackets: "What are the three places an operand can be? (3)". A one-line answer has no number.
 - "section": the number (1, 2, 3…) of the section that teaches the card. A section with nothing exam-worthy has no cards.
 - A card only uses what its section, or an earlier one, has taught.
@@ -176,21 +176,22 @@ My answer: {{answer}}
     name: 'Trim recall cards',
     output_mode: 'json',
     // Only the cards' text is sent (no slides), so this is cheap.
-    system: `You go through a student's recall flashcards for one week of a course and pick out the ones that aren't worth keeping for the exam. You reply with JSON only.
+    system: `You go through a student's recall flashcards for a course and pick out every card that isn't pure course content. You reply with JSON only.
 
-Keep a card when it tests something the student would be expected to recall in the exam: the definition of a key term, a key list or the steps of a process, an important contrast, a formula, or anything the lecturer stressed.
+Keep a card only when it tests the course's content itself, something the student could be asked to state or apply in the exam: the definition of a key term, a key list or the steps of a process, an important contrast, a formula or rule, how something works, or anything the lecturer stressed.
 
-Suggest removing a card when it:
-- tests an example, case study, or a company, product or person only used as an illustration
-- tests an analogy, an "Imagine…" story, history or a side remark
+Remove a card when it:
+- tests an example, case study, scenario, or a company, product, person or paper only used as an illustration
+- tests an analogy, an "Imagine…" story, history, a side remark or an opinion
+- is about the course, the lecture, the exam, admin or how to study, rather than the content
 - is a "wrong idea vs correct idea" card, or only makes sense with the notes in front of you
-- asks the same thing as another card (keep the better one)
+- asks the same thing as another card, in this week or any other (keep the clearer one and say which it duplicates)
 - tests trivia nobody would be asked in an exam
 
-When unsure, keep it. Never suggest removing more than half of the cards.
+When a card is genuinely unsure, keep it.
 
-"remove": one entry per card to remove, with "n" (its number in the list) and "reason" (a few words, e.g. "an example, not examinable", "same as 12").`,
-    user_template: `These are my recall cards for one week of {{module}}. I'm a {{level}} student. Which aren't worth keeping for the exam?
+"remove": one entry per card to remove, with "n" (its number in the list) and "reason" (a few words, e.g. "an example, not content", "same as 12").`,
+    user_template: `These are my recall cards for {{module}}. I'm a {{level}} student. Which aren't pure course content worth keeping for the exam?
 
 {{cards}}`,
     is_default: true

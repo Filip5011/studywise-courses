@@ -109,6 +109,7 @@ const local: Record<string, Fn> = {
   'courses.topic': (i: { id: string }) => course.getTopic(i.id),
   'courses.rateCard': (i: { topicId: string; front: string; cardId?: string; rating: 1 | 2 | 3 | 4 }) => course.rateTopicCard(i.topicId, i.front, i.rating, i.cardId),
   'courses.setWeekRecall': (i: { weekId: string; on: boolean }) => course.setWeekRecall(i.weekId, i.on),
+  'courses.setExamDate': (i: { courseId: string; date: string | null }) => course.setExamDate(i.courseId, i.date),
   'courses.figure': (i: { fileId: string; page: number }) => phone.figureUrl(i.fileId, i.page),
   'courses.progress': (i: { topicId: string; progress: Parameters<typeof course.saveProgress>[1] }) => course.saveProgress(i.topicId, i.progress),
   'courses.resetProgress': (i: { topicId: string }) => course.resetTopicProgress(i.topicId),

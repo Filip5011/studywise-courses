@@ -16,7 +16,9 @@ import { isDue } from '@shared/sm2'
 import type { Mark } from '@shared/questions'
 import type { Card, Deck, ReviewState } from '@shared/types'
 import {
+  effectiveDue,
   emptyProgress,
+  examPhase,
   mergeOutlines,
   pageList,
   sanitizeQuestions,
@@ -217,10 +219,76 @@ export function deckFolder(courseId: string): string {
   return f.id
 }
 
-/** The course's decks whose cards come up for recall: every week's, except weeks with recall turned off. */
-export function recallDeckIds(courseId: string): string[] {
+/** The course's decks with recall on: every week's, except weeks with recall turned off. */
+function recallOnDeckIds(courseId: string): string[] {
   const off = new Set((getDb().prepare('SELECT deck_id FROM weeks WHERE course_id = ? AND recall_off = 1').all(courseId) as { deck_id: string | null }[]).map((w) => w.deck_id))
   return courseDeckIds(courseId).filter((d) => !off.has(d))
+}
+
+/**
+ * The course's decks whose cards come up for review: weeks with recall on,
+ * and none once the exam is over.
+ */
+export function recallDeckIds(courseId: string): string[] {
+  return examPhase(courseRow(courseId).exam_date).phase === 'over' ? [] : recallOnDeckIds(courseId)
+}
+
+/** Set (YYYY-MM-DD) or clear the course's exam date. */
+export function setExamDate(courseId: string, date: string | null): Course {
+  if (date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Pick a date for the exam')
+  courseRow(courseId)
+  getDb().prepare('UPDATE courses SET exam_date = ? WHERE id = ?').run(date, courseId)
+  touchCourse(courseId)
+  return courseRow(courseId)
+}
+
+/**
+ * Topic cards wait until you've studied them: a card counts towards what's due
+ * once you reach its section's flashcards in the topic (or finish the topic, or
+ * rate it), not as soon as the topic is written. Cards you've reviewed are never
+ * put back to sleep. Runs when a topic is written or its progress changes, and
+ * for every topic at startup. Returns how many cards changed.
+ */
+export function refreshDormancy(topicId?: string): number {
+  const d = getDb()
+  const ids = topicId ? [topicId] : (d.prepare("SELECT id FROM topics WHERE status = 'ready'").all() as { id: string }[]).map((r) => r.id)
+  const cardsOf = d.prepare(
+    "SELECT c.id, c.dormant, EXISTS (SELECT 1 FROM review_state r WHERE r.card_id = c.id) AS reviewed FROM cards c WHERE json_extract(c.source, '$.type') = 'topic' AND json_extract(c.source, '$.ref') = ?"
+  )
+  const set = d.prepare('UPDATE cards SET dormant = ? WHERE id = ?')
+  let changed = 0
+  d.transaction(() => {
+    for (const id of ids) {
+      let t: Topic
+      try {
+        t = getTopic(id)
+      } catch {
+        continue
+      }
+      const p = t.progress
+      const started = p.done || p.section > 0 || !!p.step
+      const known = new Set<string>()
+      const reached = new Set<string>()
+      ;(t.content?.sections ?? []).forEach((s, i) => {
+        // Reached: you're past this section, or at its flashcards or questions.
+        const here = p.done || i < p.section || (i === p.section && !!p.step && p.step.section === i && p.step.kind !== 'notes')
+        for (const c of s.cards ?? [])
+          if (c.id) {
+            known.add(c.id)
+            if (here) reached.add(c.id)
+          }
+      })
+      for (const c of cardsOf.all(id) as { id: string; dormant: number; reviewed: number }[]) {
+        // Cards from older topics without per-section cards wake when you start the topic.
+        const want = c.reviewed ? 0 : known.has(c.id) ? (reached.has(c.id) ? 0 : 1) : started ? 0 : 1
+        if (want !== c.dormant) {
+          set.run(want, c.id)
+          changed++
+        }
+      }
+    }
+  })()
+  return changed
 }
 
 /** Turn recall on or off for a week. Its cards and their review history stay either way. */
@@ -676,34 +744,48 @@ export interface TrimSuggestion {
   reason: string
 }
 
+/** At most this many cards go in one call; a bigger course is checked a few weeks at a time. */
+const TRIM_BATCH = 600
+
 /**
- * Asks which of a week's recall cards (or just one topic's) aren't worth
- * keeping for the exam. Only the cards' text is sent, so it's cheap. Nothing
- * is removed here: the student picks from the suggestions.
+ * Asks which recall cards aren't pure course content: one week's (or just one
+ * topic's), or a whole course's at once so duplicates across weeks are caught.
+ * Only the cards' text is sent, so it's cheap. Nothing is removed here: the
+ * student picks from the suggestions.
  */
-export async function suggestTrim(weekId: string, topicId?: string): Promise<{ total: number; remove: TrimSuggestion[] }> {
-  const w = weekRow(weekId)
-  const c = courseRow(w.course_id)
-  if (!deckExists(w.deck_id)) return { total: 0, remove: [] }
+export async function suggestTrim(scope: { weekId: string; topicId?: string } | { courseId: string }): Promise<{ total: number; remove: TrimSuggestion[] }> {
+  const courseId = 'courseId' in scope ? scope.courseId : weekRow(scope.weekId).course_id
+  const c = courseRow(courseId)
+  const weeks = (getDb().prepare('SELECT * FROM weeks WHERE course_id = ? ORDER BY position').all(courseId) as WeekRow[]).filter((w) => !('weekId' in scope) || w.id === scope.weekId)
   const titles = new Map(listTopics(c.id).map((t) => [t.id, t.content?.title ?? t.plan.title]))
-  const cards = repo
-    .listCards(w.deck_id)
-    .map((card) => ({ card, topicId: card.source?.type === 'topic' ? (card.source.ref ?? null) : null }))
-    .filter((x) => !topicId || x.topicId === topicId)
-  if (!cards.length) return { total: 0, remove: [] }
+  const entries = weeks.flatMap((w) =>
+    deckExists(w.deck_id)
+      ? repo
+          .listCards(w.deck_id)
+          .map((card) => ({ card, week: w.label, topicId: card.source?.type === 'topic' ? (card.source.ref ?? null) : null }))
+          .filter((x) => !('topicId' in scope) || !scope.topicId || x.topicId === scope.topicId)
+      : []
+  )
+  if (!entries.length) return { total: 0, remove: [] }
   const oneLine = (s: string) => s.replace(/\s*\n\s*-\s*/g, '; ').replace(/^-\s*/, '').replace(/\s+/g, ' ').trim()
-  const list = cards.map((x, i) => `${i + 1}. [${x.topicId ? titles.get(x.topicId) ?? 'Topic' : 'Added by hand'}] Q: ${oneLine(x.card.front)} | A: ${oneLine(x.card.back)}`).join('\n')
-  const r = await runAI<CourseTrimOut>({ task: 'course_trim', vars: { module: c.module || c.name, level: c.level, cards: list }, deckId: w.deck_id })
-  const seen = new Set<number>()
-  const remove = r.data.remove
-    .filter((x) => x.n >= 1 && x.n <= cards.length && !seen.has(x.n) && (seen.add(x.n), true))
-    // Never more than half, whatever comes back.
-    .slice(0, Math.floor(cards.length / 2))
-    .map((x) => {
-      const { card, topicId: tid } = cards[x.n - 1]
-      return { cardId: card.id, topicId: tid, topicTitle: tid ? titles.get(tid) ?? '' : 'Added by hand', front: card.front, back: card.back, reason: x.reason }
-    })
-  return { total: cards.length, remove }
+  const whole = 'courseId' in scope
+  const remove: TrimSuggestion[] = []
+  for (let start = 0; start < entries.length; start += TRIM_BATCH) {
+    const batch = entries.slice(start, start + TRIM_BATCH)
+    const list = batch
+      .map((x, i) => `${i + 1}. [${whole ? `${x.week} · ` : ''}${x.topicId ? titles.get(x.topicId) ?? 'Topic' : 'Added by hand'}] Q: ${oneLine(x.card.front)} | A: ${oneLine(x.card.back)}`)
+      .join('\n')
+    const r = await runAI<CourseTrimOut>({ task: 'course_trim', vars: { module: c.module || c.name, level: c.level, cards: list }, deckId: courseDeckId(courseId) })
+    const seen = new Set<number>()
+    for (const x of r.data.remove) {
+      if (x.n < 1 || x.n > batch.length || seen.has(x.n)) continue
+      seen.add(x.n)
+      const { card, topicId: tid, week } = batch[x.n - 1]
+      const topic = tid ? titles.get(tid) ?? '' : 'Added by hand'
+      remove.push({ cardId: card.id, topicId: tid, topicTitle: whole ? `${week} · ${topic}` : topic, front: card.front, back: card.back, reason: x.reason })
+    }
+  }
+  return { total: entries.length, remove }
 }
 
 /** Removes recall cards, and the same cards from their topics' section flashcards. */
@@ -802,6 +884,8 @@ export async function writeTopic(topicId: string, ctx: JobContext, instructions 
     const idByFront = new Map(cards.map((c) => [c.front, c.id]))
     for (const s of content.sections) for (const c of s.cards ?? []) c.id = idByFront.get(c.front)
     setTopic(topicId, { status: 'ready', error: null, content: JSON.stringify(content), progress: JSON.stringify(emptyProgress()) })
+    // Its cards wait until you study it.
+    refreshDormancy(topicId)
     touchCourse(course.id)
 
     const figs = content.sections.map((s) => s.figure).filter((f): f is Figure => !!f)
@@ -853,12 +937,14 @@ export async function figureUrl(fileId: string, page: number): Promise<string> {
 
 export function saveProgress(topicId: string, progress: TopicProgress): Topic {
   setTopic(topicId, { progress: JSON.stringify({ ...progress, lastStudied: now() }) })
+  refreshDormancy(topicId)
   touchCourse(getTopic(topicId).course_id)
   return getTopic(topicId)
 }
 
 export function resetTopicProgress(topicId: string): Topic {
   setTopic(topicId, { progress: JSON.stringify(emptyProgress()) })
+  refreshDormancy(topicId)
   return getTopic(topicId)
 }
 
@@ -889,12 +975,17 @@ export function recallCard(courseId: string, excludeTopicId: string, exclude: st
   const started = listTopics(courseId).filter((t) => t.id !== excludeTopicId && t.status === 'ready' && (t.progress.section > 0 || t.progress.done))
   if (!started.length) return null
   const titles = new Map(started.map((t) => [t.id, t.content?.title ?? t.plan.title]))
-  const cards = decks.flatMap((d) => repo.listCards(d)).filter((card) => card.source?.type === 'topic' && card.source.ref && titles.has(card.source.ref) && !exclude.includes(card.id))
+  const sleeping = new Set((getDb().prepare('SELECT id FROM cards WHERE dormant = 1').all() as { id: string }[]).map((r) => r.id))
+  const cards = decks.flatMap((d) => repo.listCards(d)).filter((card) => card.source?.type === 'topic' && card.source.ref && titles.has(card.source.ref) && !exclude.includes(card.id) && !sleeping.has(card.id))
   if (!cards.length) return null
   const states = new Map(
     (getDb().prepare(`SELECT r.* FROM review_state r JOIN cards c ON c.id = r.card_id WHERE c.deck_id IN (${decks.map(() => '?').join(',')})`).all(...decks) as ReviewState[]).map((s) => [s.card_id, s])
   )
-  const due = cards.filter((card) => isDue(states.get(card.id)))
+  const exam = courseRow(courseId).exam_date
+  const due = cards.filter((card) => {
+    const s = states.get(card.id)
+    return s ? isDue({ due: effectiveDue(s.due, s.last_reviewed ?? null, exam) }) : true
+  })
   const pool = due.length ? due : cards
   const card = pool[Math.floor(Math.random() * pool.length)]
   return { card, topicTitle: titles.get(card.source!.ref!) ?? '' }

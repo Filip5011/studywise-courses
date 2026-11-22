@@ -189,8 +189,92 @@ export interface Course {
   deck_id: string | null
   /** The course's folder in Decks, holding one deck per week. */
   deck_folder_id: string | null
+  /** YYYY-MM-DD. Recall is steady until EXAM_REVISION_DAYS before it, then ramps up, and every card gets a last look before it. */
+  exam_date: string | null
   created_at: string
   updated_at: string
+}
+
+/** How many days before the exam revision starts. */
+export const EXAM_REVISION_DAYS = 42
+
+/**
+ * Where a course is relative to its exam: no date; steady (exam more than 6
+ * weeks off: reviews keep going, a little more spread out); revision (the last
+ * 6 weeks: reviews ramp up as the exam gets closer); over (the course rests).
+ */
+export type ExamPhase = { phase: 'none' } | { phase: 'steady'; days: number; startsOn: string | null } | { phase: 'revision'; days: number } | { phase: 'over' }
+
+const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+export function examPhase(examDate: string | null | undefined, now = new Date()): ExamPhase {
+  if (!examDate || !/^\d{4}-\d{2}-\d{2}$/.test(examDate)) return { phase: 'none' }
+  const [y, m, d] = examDate.split('-').map(Number)
+  const exam = new Date(y, m - 1, d)
+  const days = Math.round((exam.getTime() - dayStart(now).getTime()) / 86_400_000)
+  if (days < 0) return { phase: 'over' }
+  if (days > EXAM_REVISION_DAYS) {
+    const start = new Date(exam)
+    start.setDate(start.getDate() - EXAM_REVISION_DAYS)
+    return { phase: 'steady', days, startsOn: isoDay(start) }
+  }
+  return { phase: 'revision', days }
+}
+
+/** Reviews never land later than this many days before the exam, so every card gets a last look. */
+export const LAST_LOOK_DAYS_BEFORE = 2
+
+/** Far from the exam, reviews are spaced out this much more than usual: fewer a day, but they keep going. */
+export const STEADY_STRETCH = 1.5
+
+/**
+ * The longest gap between reviews during revision, shrinking as the exam gets
+ * closer: 10 days six weeks out, 3 days two weeks out, every day for the last few.
+ */
+export function revisionMaxGapDays(daysLeft: number): number {
+  return Math.max(1, Math.min(10, Math.floor(daysLeft / 4)))
+}
+
+/**
+ * When a course card's review is really due. During revision it's pulled in so
+ * no card goes longer than the current maximum gap (or past its last look before
+ * the exam), which ramps reviews up without rescheduling anything. Otherwise
+ * it's just the scheduled date.
+ */
+export function effectiveDue(due: string, lastReviewed: string | null, examDate: string | null | undefined, now = new Date()): string {
+  const p = examPhase(examDate, now)
+  if (p.phase !== 'revision') return due
+  let t = new Date(due).getTime()
+  if (lastReviewed) t = Math.min(t, new Date(lastReviewed).getTime() + revisionMaxGapDays(p.days) * 86_400_000)
+  const last = lastLookBefore(examDate, now)
+  if (last) t = Math.min(t, last.getTime())
+  return new Date(t).toISOString()
+}
+
+/**
+ * Where to schedule a course card's next review, given what the scheduler
+ * picked: further out while the exam is far off, closer in during revision,
+ * never after the last look before the exam.
+ */
+export function examAdjustedDue(due: string, reviewedAt: Date, examDate: string | null | undefined): string {
+  const p = examPhase(examDate, reviewedAt)
+  const at = reviewedAt.getTime()
+  let t = new Date(due).getTime()
+  if (p.phase === 'steady') t = at + (t - at) * STEADY_STRETCH
+  if (p.phase === 'revision') t = Math.min(t, at + revisionMaxGapDays(p.days) * 86_400_000)
+  const last = lastLookBefore(examDate, reviewedAt)
+  if (last) t = Math.min(t, Math.max(last.getTime(), at + 86_400_000))
+  return new Date(t).toISOString()
+}
+
+/** The latest a review should be due for a course with this exam date, or null for no limit. */
+export function lastLookBefore(examDate: string | null | undefined, now = new Date()): Date | null {
+  const p = examPhase(examDate, now)
+  if (p.phase === 'none' || p.phase === 'over') return null
+  const [y, m, d] = examDate!.split('-').map(Number)
+  const last = new Date(y, m - 1, d - LAST_LOOK_DAYS_BEFORE)
+  return last.getTime() > dayStart(now).getTime() ? last : null
 }
 
 export interface CourseFull extends Course {

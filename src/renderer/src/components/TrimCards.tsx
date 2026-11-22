@@ -12,7 +12,7 @@ type Suggestion = Awaited<ReturnType<typeof api.courses.suggestTrim>>['remove'][
  * aren't worth keeping for the exam (only the card text is sent), and you pick
  * which to delete. Nothing goes until you confirm.
  */
-export function TrimCardsModal({ weekId, topicId, title, onClose }: { weekId: string; topicId?: string; title: string; onClose: () => void }) {
+export function TrimCardsModal({ weekId, topicId, courseId, title, onClose }: { weekId?: string; topicId?: string; courseId?: string; title: string; onClose: () => void }) {
   const [result, setResult] = useState<{ total: number; remove: Suggestion[] } | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [failed, setFailed] = useState<string | null>(null)
@@ -21,7 +21,7 @@ export function TrimCardsModal({ weekId, topicId, title, onClose }: { weekId: st
   useEffect(() => {
     let alive = true
     api.courses
-      .suggestTrim({ weekId, topicId })
+      .suggestTrim(courseId ? { courseId } : { weekId: weekId!, topicId })
       .then((r) => {
         if (!alive) return
         setResult(r)
@@ -31,7 +31,7 @@ export function TrimCardsModal({ weekId, topicId, title, onClose }: { weekId: st
     return () => {
       alive = false
     }
-  }, [weekId, topicId])
+  }, [weekId, topicId, courseId])
 
   const toggle = (id: string) =>
     setPicked((cur) => {
@@ -85,7 +85,7 @@ export function TrimCardsModal({ weekId, topicId, title, onClose }: { weekId: st
           <div className="flex items-center justify-center gap-2">
             Checking which cards are worth keeping <Dots />
           </div>
-          <p className="text-[0.85rem]">Only the cards’ text is sent, no slides, so this is cheap.</p>
+          <p className="text-[0.85rem]">Only the cards’ text is sent, no slides, so this is cheap{courseId ? '. A whole course takes a minute or so.' : '.'}</p>
         </div>
       ) : !suggestions.length ? (
         <p className="py-6 text-center text-muted">
@@ -94,7 +94,7 @@ export function TrimCardsModal({ weekId, topicId, title, onClose }: { weekId: st
       ) : (
         <div className="flex flex-col gap-3">
           <p className="text-[0.92rem] text-muted">
-            {suggestions.length} of {result.total} cards don’t look worth keeping. Untick any you want to keep. Removing a card also takes it out of its topic’s flashcards and your spaced review.
+            {suggestions.length} of {result.total} cards aren’t pure content worth keeping. Untick any you want to keep. Removing a card also takes it out of its topic’s flashcards and your spaced review.
           </p>
           <div className="flex max-h-[55vh] flex-col gap-2 overflow-y-auto pr-1">
             {suggestions.map((s) => {
