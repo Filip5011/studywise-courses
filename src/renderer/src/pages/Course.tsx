@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff } from 'lucide-react'
+import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff, CalendarDays, Scissors } from 'lucide-react'
 import { importSharedWeek } from '../lib/weekShare'
-import type { CourseFull, WeekFull } from '@shared/course'
+import { TrimCardsModal } from '../components/TrimCards'
+import { examPhase, revisionMaxGapDays, type CourseFull, type WeekFull } from '@shared/course'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
 import { askText, confirmDialog } from '../lib/dialogs'
@@ -19,6 +20,8 @@ export function CoursePage({ id }: { id: string }) {
   const [error, setError] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [aiDeck, setAiDeck] = useState<Deck | null>(null)
+  const [trimAll, setTrimAll] = useState(false)
+  const [examOpen, setExamOpen] = useState(false)
   const load = () =>
     api.courses
       .get({ id })
@@ -107,6 +110,14 @@ export function CoursePage({ id }: { id: string }) {
                   <MenuItem desktopOnly icon={<Download className="size-4" />} onClick={() => (close(), void importSharedWeek({ courseId: id }))}>
                     Add a shared week…
                   </MenuItem>
+                  <MenuItem icon={<CalendarDays className="size-4" />} onClick={() => (close(), setExamOpen(true))}>
+                    {c.exam_date ? 'Change exam date…' : 'Set exam date…'}
+                  </MenuItem>
+                  {topics.some((t) => t.card_count > 0) && (
+                    <MenuItem icon={<Scissors className="size-4" />} onClick={() => (close(), setTrimAll(true))}>
+                      Trim recall cards (whole course)…
+                    </MenuItem>
+                  )}
                   <MenuItem icon={<SlidersHorizontal className="size-4" />} onClick={() => (close(), void openAiSettings())}>
                     Models &amp; instructions
                   </MenuItem>
@@ -131,6 +142,7 @@ export function CoursePage({ id }: { id: string }) {
           {c.weeks.length} week{c.weeks.length === 1 ? '' : 's'}
           {topics.length > 0 && ` · ${topics.length} topics · about ${Math.round(minutes / 5) * 5 || minutes} minutes · ${done} done`}
         </span>
+        <ExamBadge date={c.exam_date} onClick={() => setExamOpen(true)} />
       </PageTitle>
 
       {topics.length > 0 && <ProgressBar value={done / topics.length} className="mb-8" />}
@@ -151,6 +163,29 @@ export function CoursePage({ id }: { id: string }) {
       </button>
 
       {aiDeck && <DeckSettings deck={aiDeck} courseId={c.id} onClose={() => setAiDeck(null)} onSaved={() => setAiDeck(null)} />}
+      {trimAll && (
+        <TrimCardsModal
+          courseId={c.id}
+          title={c.name}
+          onClose={() => {
+            setTrimAll(false)
+            void load()
+          }}
+        />
+      )}
+      {examOpen && (
+        <ExamDateModal
+          courseId={c.id}
+          date={c.exam_date}
+          onClose={(changed) => {
+            setExamOpen(false)
+            if (changed) {
+              void load()
+              useStore.getState().bump()
+            }
+          }}
+        />
+      )}
 
       {adding && (
         <AddWeekModal
@@ -164,6 +199,75 @@ export function CoursePage({ id }: { id: string }) {
         />
       )}
     </Shell>
+  )
+}
+
+const fmtDate = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+
+/** "Exam 14 Jan 2027 · in 53 days · revision from 3 Dec", or a prompt to set one. */
+function ExamBadge({ date, onClick }: { date: string | null; onClick: () => void }) {
+  const p = examPhase(date)
+  const text =
+    p.phase === 'none'
+      ? 'Set an exam date'
+      : p.phase === 'over'
+        ? `Exam was ${fmtDate(date!)} · recall resting`
+        : p.phase === 'steady'
+          ? `Exam ${fmtDate(date!)} · in ${p.days} days · steady recall, revision from ${p.startsOn ? fmtDate(p.startsOn) : 'later'}`
+          : `Exam ${fmtDate(date!)} · ${p.days === 0 ? 'today' : `in ${p.days} day${p.days === 1 ? '' : 's'}`} · revision: every card at least every ${revisionMaxGapDays(p.days)} day${revisionMaxGapDays(p.days) === 1 ? '' : 's'}`
+  return (
+    <button
+      onClick={onClick}
+      className="ml-2 align-middle"
+      title={
+        p.phase === 'none'
+          ? 'With an exam date, recall stays steady until 6 weeks before it, then ramps up, and every card gets a last look before the exam.'
+          : 'More than 6 weeks out, reviews keep going a little more spread out. In the last 6 weeks they ramp up: the longest gap between reviews shrinks from 10 days to every day, and every card is due once more at least 2 days before the exam. After the exam the course rests.'
+      }
+    >
+      <Pill tone={p.phase === 'revision' ? 'warn' : 'neutral'}>
+        <CalendarDays className="size-3" /> {text}
+      </Pill>
+    </button>
+  )
+}
+
+function ExamDateModal({ courseId, date, onClose }: { courseId: string; date: string | null; onClose: (changed: boolean) => void }) {
+  const [value, setValue] = useState(date ?? '')
+  const save = async (d: string | null) => {
+    try {
+      await api.courses.setExamDate({ courseId, date: d })
+      onClose(true)
+    } catch (e) {
+      toast(errorText(e), 'bad')
+    }
+  }
+  return (
+    <Modal
+      open
+      onClose={() => onClose(false)}
+      title="Exam date"
+      footer={
+        <>
+          {date && (
+            <Button variant="ghost" onClick={() => void save(null)}>
+              Clear
+            </Button>
+          )}
+          <Button variant="ghost" onClick={() => onClose(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" disabled={!value} onClick={() => void save(value)}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <p className="mb-3 text-[0.92rem] text-muted">
+        Until 6 weeks before the exam, reviews keep going at a steady pace, a little more spread out than usual. Then revision starts and they ramp up: no card goes longer than 10 days without a review, shrinking to every day in the final days, and every card gets a last look at least 2 days before the exam. After the exam the course rests.
+      </p>
+      <Input type="date" value={value} onChange={(e) => setValue(e.target.value)} />
+    </Modal>
   )
 }
 

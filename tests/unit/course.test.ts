@@ -379,12 +379,16 @@ describe('trimming recall cards', () => {
     const content = { ...topic.content!, sections: topic.content!.sections.map((s, i) => (i ? s : { ...s, cards: [...(s.cards ?? []), { front: trivia.front, back: trivia.back, id: trivia.id }] })) }
     getDb().prepare('UPDATE topics SET content = ? WHERE id = ?').run(JSON.stringify(content), t.id)
 
-    const r = await svc.suggestTrim(week.id)
+    const r = await svc.suggestTrim({ weekId: week.id })
     expect(r.total).toBeGreaterThan(1)
     expect(r.remove.map((s) => s.cardId)).toEqual([trivia.id])
     expect(r.remove[0]).toMatchObject({ topicId: t.id, reason: 'an example, not examinable' })
     // Only one topic's cards when asked.
-    expect((await svc.suggestTrim(week.id, 'some-other-topic')).total).toBe(0)
+    expect((await svc.suggestTrim({ weekId: week.id, topicId: 'some-other-topic' })).total).toBe(0)
+    // The whole course at once finds it too, labelled with its week.
+    const all = await svc.suggestTrim({ courseId: t.course_id })
+    expect(all.remove.map((s) => s.cardId)).toEqual([trivia.id])
+    expect(all.remove[0].topicTitle.startsWith(week.label + ' · ')).toBe(true)
 
     expect(svc.removeTopicCards([trivia.id])).toBe(1)
     expect(repo.listCards(week.deck_id!).some((c) => c.id === trivia.id)).toBe(false)
@@ -402,7 +406,8 @@ describe('turning recall off for a week', () => {
     await svc.planWeek(w.id, ctx())
     const [t1, t2] = svc.listTopics(c.id)
     await svc.writeTopic(t1.id, ctx())
-    svc.saveProgress(t1.id, { section: 1, done: false, answered: 0, correct: 0, checkScore: null, checkTotal: null, lastStudied: null })
+    // Finished, so all its cards are in review (cards wait until you've studied them).
+    svc.saveProgress(t1.id, { section: 3, done: true, answered: 0, correct: 0, checkScore: null, checkTotal: null, lastStudied: null })
     const deck = svc.getCourse(c.id).weeks[0].deck_id!
     const cards = repo.listCards(deck).length
     expect(cards).toBeGreaterThan(0)
@@ -422,5 +427,101 @@ describe('turning recall off for a week', () => {
     expect(svc.setWeekRecall(w.id, true).recall_off).toBe(false)
     expect(svc.dueCards(c.id).length).toBe(cards)
     expect(repo.dueCountsByDeck().get(deck)).toBe(cards)
+  })
+})
+
+describe('cards wait until you study them', () => {
+  it('a written topic adds nothing to review until you reach each section; reviewed cards stay', async () => {
+    const repo = await import('../../src/main/db/repo')
+    const c = svc.createCourse({ name: 'Dormancy', level: 'first-year' })
+    const w = svc.addWeek(c.id, 'Week 1')
+    await svc.addFiles(w.id, [resolve('tests/fixtures/photoelectric-lecture.pdf')])
+    await svc.planWeek(w.id, ctx())
+    const t = svc.listTopics(c.id)[1]
+    await svc.writeTopic(t.id, ctx())
+    const deck = svc.getCourse(c.id).weeks[0].deck_id!
+    const bySection = svc.getTopic(t.id).content!.sections.map((s) => (s.cards ?? []).map((x) => x.id!))
+    const total = repo.listCards(deck).length
+    // Just written: nothing due anywhere.
+    expect(svc.dueCards(c.id)).toEqual([])
+    expect(repo.dueCountsByDeck().get(deck)).toBeUndefined()
+    expect(repo.dueCards(deck)).toEqual([])
+
+    // At section 2's flashcards: sections 1 and 2 are in review, 3 isn't.
+    const base = { done: false, answered: 0, correct: 0, checkScore: null, checkTotal: null, lastStudied: null }
+    svc.saveProgress(t.id, { ...base, section: 1, step: { kind: 'cards', section: 1 } })
+    expect(new Set(svc.dueCards(c.id).map((x) => x.id))).toEqual(new Set([...bySection[0], ...bySection[1]]))
+
+    // Rate a section-2 card, then reset the topic: the rated card stays in review, the rest wait again.
+    repo.applyReview(bySection[1][0], 3, 'learn')
+    svc.resetTopicProgress(t.id)
+    const sleeping = repo.listCards(deck).filter((x) => !svc.dueCards(c.id).some((d) => d.id === x.id) && x.id !== bySection[1][0])
+    expect(sleeping.length).toBe(total - 1)
+
+    // Finished: everything's in review.
+    svc.saveProgress(t.id, { ...base, section: 3, done: true })
+    expect(repo.dueCountsByDeck().get(deck)).toBe(total - 1) // the rated one isn't due again yet
+  })
+})
+
+describe('exam dates', () => {
+  const day = (offset: number) => {
+    const d = new Date()
+    d.setDate(d.getDate() + offset)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const DAY = 86_400_000
+  it('phases: steady while far off, revision for the last 6 weeks, resting after', async () => {
+    const { examPhase, revisionMaxGapDays } = await import('@shared/course')
+    expect(examPhase(null).phase).toBe('none')
+    expect(examPhase(day(100))).toMatchObject({ phase: 'steady', days: 100, startsOn: day(58) })
+    expect(examPhase(day(42))).toMatchObject({ phase: 'revision', days: 42 })
+    expect(examPhase(day(-1)).phase).toBe('over')
+    // The longest gap between reviews shrinks as the exam gets closer.
+    expect([42, 28, 12, 6, 2, 0].map(revisionMaxGapDays)).toEqual([10, 7, 3, 1, 1, 1])
+  })
+  it('spaces reviews out while far off, pulls them in during revision, never past the last look', async () => {
+    const { examAdjustedDue } = await import('@shared/course')
+    const now = new Date()
+    const in20 = new Date(now.getTime() + 20 * DAY).toISOString()
+    const gap = (iso: string) => Math.round((new Date(iso).getTime() - now.getTime()) / DAY)
+    expect(gap(examAdjustedDue(in20, now, null))).toBe(20)
+    expect(gap(examAdjustedDue(in20, now, day(200)))).toBe(30) // steady: 1.5x further out
+    expect(gap(examAdjustedDue(in20, now, day(30)))).toBe(7) // revision, 30 days left: at most 7
+    expect(gap(examAdjustedDue(in20, now, day(5)))).toBeLessThanOrEqual(3) // and the last look comes before the exam
+  })
+  it('keeps reviewing a course far from its exam, ramps it up in revision, rests it after', async () => {
+    const repo = await import('../../src/main/db/repo')
+    const { getDb } = await import('../../src/main/db')
+    const c = svc.createCourse({ name: 'Exam course', level: 'first-year' })
+    const w = svc.addWeek(c.id, 'Week 1')
+    await svc.addFiles(w.id, [resolve('tests/fixtures/photoelectric-lecture.pdf')])
+    await svc.planWeek(w.id, ctx())
+    const t = svc.listTopics(c.id)[0]
+    await svc.writeTopic(t.id, ctx())
+    svc.saveProgress(t.id, { section: 3, done: true, answered: 0, correct: 0, checkScore: null, checkTotal: null, lastStudied: null })
+    const deck = svc.getCourse(c.id).weeks[0].deck_id!
+    const n = repo.listCards(deck).length
+
+    // Far off: not quiet, everything new is still due.
+    svc.setExamDate(c.id, day(90))
+    expect(svc.dueCards(c.id).length).toBe(n)
+    expect(repo.dueCountsByDeck().get(deck)).toBe(n)
+
+    // A card you knew 5 days ago, next due in 60 days: not due while far off...
+    const card = repo.listCards(deck)[0]
+    repo.applyReview(card.id, 3, 'flashcard')
+    getDb().prepare('UPDATE review_state SET last_reviewed = ?, due = ? WHERE card_id = ?').run(new Date(Date.now() - 5 * DAY).toISOString(), new Date(Date.now() + 60 * DAY).toISOString(), card.id)
+    expect(svc.dueCards(c.id).some((x) => x.id === card.id)).toBe(false)
+    // ...but in revision 20 days out (at most 5 days between reviews) it's due again today.
+    svc.setExamDate(c.id, day(20))
+    expect(svc.dueCards(c.id).some((x) => x.id === card.id)).toBe(true)
+    expect(repo.dueCountsByDeck().get(deck)).toBe(n)
+
+    // After the exam the course rests.
+    svc.setExamDate(c.id, day(-1))
+    expect(svc.dueCards(c.id)).toEqual([])
+    expect(repo.dueCountsByDeck().get(deck)).toBeUndefined()
+    expect(svc.setExamDate(c.id, null).exam_date).toBeNull()
   })
 })

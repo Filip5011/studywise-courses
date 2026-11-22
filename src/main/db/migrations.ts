@@ -250,6 +250,10 @@ export const MIGRATIONS: string[] = [
   /* 6: syncing with the phone app (change log filled by triggers) */ SYNC_SCHEMA_SQL,
   /* 7: recall can be turned off for a week */ `
   ALTER TABLE weeks ADD COLUMN recall_off INTEGER NOT NULL DEFAULT 0;
+  `,
+  /* 8: topic cards wait until you've studied them; courses have an exam date */ `
+  ALTER TABLE cards ADD COLUMN dormant INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE courses ADD COLUMN exam_date TEXT;
   `
 ]
 

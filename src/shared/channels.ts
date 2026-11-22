@@ -83,6 +83,7 @@ export const CHANNELS = [
   'courses.suggestTrim',
   'courses.removeCards',
   'courses.setWeekRecall',
+  'courses.setExamDate',
   'sync.status',
   'sync.setEnabled',
   'sync.pairCode',

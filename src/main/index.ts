@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Notification, protocol, session, shell, net, nativeTheme } from 'electron'
 import { join, extname, normalize, sep } from 'node:path'
-import { recoverInterrupted, backfillNotes, organizeCourseDecks, organizeCourseNotes, fixTopicCardCounts } from './services/course'
+import { recoverInterrupted, backfillNotes, organizeCourseDecks, organizeCourseNotes, fixTopicCardCounts, refreshDormancy } from './services/course'
 import { appendFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { initPaths, paths } from './paths'
@@ -243,6 +243,12 @@ app.whenReady().then(async () => {
     if (n) console.log(`[courses] added the (n) point count to ${n} topic card${n === 1 ? '' : 's'}`)
   } catch (e) {
     console.error('[courses] fixing card point counts failed:', e)
+  }
+  try {
+    const n = refreshDormancy()
+    if (n) console.log(`[courses] ${n} topic card${n === 1 ? '' : 's'} now wait for (or joined) review based on what you've studied`)
+  } catch (e) {
+    console.error('[courses] updating which cards are studied failed:', e)
   }
   void backfillNotes().catch(() => {})
   aiQueue.setLimit(repo.getSetting<number>('ai.concurrency', 3))
