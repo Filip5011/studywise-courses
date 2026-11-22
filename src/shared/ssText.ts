@@ -55,6 +55,19 @@ export function countBlanks(question: string): number {
   return (question.match(BLANK_RE) ?? []).length
 }
 
+/**
+ * A question whose answer is a list says how many points it wants: "(2)" for
+ * two bullets. Adds a missing count and fixes a wrong one. Fill-in-the-blank
+ * questions (___) never get one, and a one-line answer is left alone.
+ */
+export function withPointCount(front: string, back: string): string {
+  if (countBlanks(front) > 0) return front
+  const n = bulletItems(back).length
+  if (n < 2) return front
+  const base = front.trim().replace(/\s*\(\d{1,2}\)\s*$/, '')
+  return `${base} (${n})`
+}
+
 /** Lines starting with "- " (ignoring indentation) */
 export function bulletItems(answer: string): string[] {
   return answer

@@ -173,7 +173,8 @@ describe('course service (mock AI)', () => {
     expect(t2.content!.sections.map((s) => (s.cards ?? []).map((c) => c.front))).toEqual([
       ['What is a photoelectron?'],
       ['What is the work function?', 'What is the threshold frequency?'],
-      ['Does brighter light give faster photoelectrons?']
+      // Its answer is two bullets, so the question says (2).
+      ['Does brighter light give faster photoelectrons? (2)']
     ])
     // They point at their deck cards, and rating one schedules it (by id, or by front for older topics).
     const sc = t2.content!.sections[1].cards![0]
@@ -336,5 +337,90 @@ describe('sharing a week', () => {
     expect(tb[0].plan.sources?.[0]?.file).toBe('photoelectric-lecture (2).pdf')
     // The original week is untouched.
     expect(svc.listTopics(src.id).filter((t) => t.week_id === w2.id)[0].progress.section).toBe(2)
+  })
+})
+
+describe('point counts on topic cards', () => {
+  it('adds a missing (n), fixes a wrong one, and leaves one-line answers and blanks alone', async () => {
+    const { withPointCount } = await import('@shared/ssText')
+    expect(withPointCount('What are the three places an operand can be?', '- Main memory\n- Registers\n- The instruction')).toBe('What are the three places an operand can be? (3)')
+    expect(withPointCount('Name two hazards (3)', '- Data\n\n- Control')).toBe('Name two hazards (2)')
+    expect(withPointCount('What is the work function?', 'The minimum energy to free an electron')).toBe('What is the work function?')
+    expect(withPointCount('Each electron absorbs ___', '- one photon\n- of energy')).toBe('Each electron absorbs ___')
+  })
+  it('fixes existing topic cards and the same cards inside their topic', async () => {
+    const repo = await import('../../src/main/db/repo')
+    const { getDb } = await import('../../src/main/db')
+    const t = svc.listTopics(svc.listCourses()[0].id).find((x) => x.status === 'ready')!
+    const card = t.content!.sections.flatMap((s) => s.cards ?? []).find((c) => c.id)!
+    // An old card: a list answer with no count, both in the deck and in the topic.
+    repo.updateCard(card.id!, { front: 'List the two parts', back: '- one\n- two' })
+    const content = { ...t.content!, sections: t.content!.sections.map((s) => ({ ...s, cards: (s.cards ?? []).map((c) => (c.id === card.id ? { ...c, front: 'List the two parts', back: '- one\n- two' } : c)) })) }
+    getDb().prepare('UPDATE topics SET content = ? WHERE id = ?').run(JSON.stringify(content), t.id)
+    expect(svc.fixTopicCardCounts()).toBeGreaterThanOrEqual(1)
+    const fixed = repo.getCard(card.id!)
+    expect(fixed.front).toBe('List the two parts (2)')
+    expect(fixed.required_points).toBe(2)
+    expect(svc.getTopic(t.id).content!.sections.flatMap((s) => s.cards ?? []).find((c) => c.id === card.id)!.front).toBe('List the two parts (2)')
+    // Running again changes nothing.
+    expect(svc.fixTopicCardCounts()).toBe(0)
+  })
+})
+
+describe('trimming recall cards', () => {
+  it('suggests cards that are only illustrations, and removing one takes it out of its topic too', async () => {
+    const repo = await import('../../src/main/db/repo')
+    const { getDb } = await import('../../src/main/db')
+    const t = svc.listTopics(svc.listCourses()[0].id).find((x) => x.status === 'ready')!
+    const week = svc.getCourse(t.course_id).weeks.find((w) => w.id === t.week_id)!
+    // A trivia card, in the deck and in the topic's first section.
+    const [trivia] = repo.createCards([{ deck_id: week.deck_id!, front: 'Which companies are given as examples?', back: 'Google, Amazon', source: { type: 'topic', ref: t.id, section: 'x' } }])
+    const topic = svc.getTopic(t.id)
+    const content = { ...topic.content!, sections: topic.content!.sections.map((s, i) => (i ? s : { ...s, cards: [...(s.cards ?? []), { front: trivia.front, back: trivia.back, id: trivia.id }] })) }
+    getDb().prepare('UPDATE topics SET content = ? WHERE id = ?').run(JSON.stringify(content), t.id)
+
+    const r = await svc.suggestTrim(week.id)
+    expect(r.total).toBeGreaterThan(1)
+    expect(r.remove.map((s) => s.cardId)).toEqual([trivia.id])
+    expect(r.remove[0]).toMatchObject({ topicId: t.id, reason: 'an example, not examinable' })
+    // Only one topic's cards when asked.
+    expect((await svc.suggestTrim(week.id, 'some-other-topic')).total).toBe(0)
+
+    expect(svc.removeTopicCards([trivia.id])).toBe(1)
+    expect(repo.listCards(week.deck_id!).some((c) => c.id === trivia.id)).toBe(false)
+    expect(svc.getTopic(t.id).content!.sections.flatMap((s) => s.cards ?? []).some((c) => c.id === trivia.id)).toBe(false)
+  })
+})
+
+describe('turning recall off for a week', () => {
+  it('keeps the cards but leaves them out of recall, course review and due counts until it is back on', async () => {
+    const repo = await import('../../src/main/db/repo')
+    // A course with one written week, so every recall card comes from it.
+    const c = svc.createCourse({ name: 'Recall toggle', level: 'first-year' })
+    const w = svc.addWeek(c.id, 'Week 1')
+    await svc.addFiles(w.id, [resolve('tests/fixtures/photoelectric-lecture.pdf')])
+    await svc.planWeek(w.id, ctx())
+    const [t1, t2] = svc.listTopics(c.id)
+    await svc.writeTopic(t1.id, ctx())
+    svc.saveProgress(t1.id, { section: 1, done: false, answered: 0, correct: 0, checkScore: null, checkTotal: null, lastStudied: null })
+    const deck = svc.getCourse(c.id).weeks[0].deck_id!
+    const cards = repo.listCards(deck).length
+    expect(cards).toBeGreaterThan(0)
+    expect(svc.recallCard(c.id, t2.id)).not.toBeNull()
+    expect(svc.dueCards(c.id).length).toBe(cards)
+    expect(repo.dueCountsByDeck().get(deck)).toBe(cards)
+
+    expect(svc.setWeekRecall(w.id, false).recall_off).toBe(true)
+    expect(svc.recallCard(c.id, t2.id)).toBeNull()
+    expect(svc.dueCards(c.id)).toEqual([])
+    expect(repo.dueCountsByDeck().get(deck)).toBeUndefined()
+    expect(svc.listCourses().find((x) => x.id === c.id)!.due_count).toBe(0)
+    // Nothing deleted, and the deck can still be reviewed by hand.
+    expect(repo.listCards(deck).length).toBe(cards)
+    expect(repo.dueCards(deck).length).toBe(cards)
+
+    expect(svc.setWeekRecall(w.id, true).recall_off).toBe(false)
+    expect(svc.dueCards(c.id).length).toBe(cards)
+    expect(repo.dueCountsByDeck().get(deck)).toBe(cards)
   })
 })

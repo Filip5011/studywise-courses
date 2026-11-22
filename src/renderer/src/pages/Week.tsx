@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
+  Scissors,
+  BellOff,
+  BellRing,
   AlertTriangle,
   Captions,
   CheckCircle2,
@@ -33,6 +36,7 @@ import { api, errorText } from '../lib/api'
 import { askText, confirmDialog } from '../lib/dialogs'
 import { Shell, PageTitle } from '../components/Shell'
 import { Button, Dots, Menu, MenuItem, Pill, ProgressBar, cx } from '../components/ui'
+import { TrimCardsModal } from '../components/TrimCards'
 import { JobLive } from '../components/JobLive'
 import { IS_MOBILE } from '../lib/platform'
 
@@ -84,6 +88,18 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
   const unwritten = w.topics.filter((t) => t.status === 'planned' || t.status === 'error')
   const done = w.topics.filter((t) => t.progress.done).length
   const nextUp = w.topics.find((t) => t.status === 'ready' && !t.progress.done)
+  // Trimming recall cards: the whole week, or one topic.
+  const [trim, setTrim] = useState<{ topicId?: string; title: string } | null>(null)
+  const toggleRecall = async () => {
+    try {
+      await api.courses.setWeekRecall({ weekId: w.id, on: w.recall_off })
+      toast(w.recall_off ? `Recall is back on for ${w.label}` : `Recall off for ${w.label}: its cards won’t come up in recall, course review or due counts. Nothing is deleted.`, 'good')
+      useStore.getState().bump()
+      reload()
+    } catch (e) {
+      toast(errorText(e), 'bad')
+    }
+  }
   const minutes = w.topics.reduce((n, t) => n + (t.plan.minutes || 0), 0)
 
   const write = async (topicIds: string[]) => {
@@ -176,6 +192,14 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
                       {w.topics.length ? 'Plan again' : 'Plan topics'}
                     </MenuItem>
                   )}
+                  {w.card_count > 0 && (
+                    <MenuItem icon={<Scissors className="size-4" />} onClick={() => (close(), setTrim({ title: w.label }))}>
+                      Trim recall cards…
+                    </MenuItem>
+                  )}
+                  <MenuItem icon={w.recall_off ? <BellRing className="size-4" /> : <BellOff className="size-4" />} onClick={() => (close(), void toggleRecall())}>
+                    {w.recall_off ? 'Turn recall back on' : 'Turn off recall for this week'}
+                  </MenuItem>
                   <MenuItem icon={<Share2 className="size-4" />} onClick={() => (close(), void shareWeek(w.id))}>
                     Share this week…
                   </MenuItem>
@@ -195,6 +219,13 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
           {w.topics.length ? `${w.topics.length} topic${w.topics.length === 1 ? '' : 's'} · about ${Math.round(minutes / 5) * 5 || minutes} minutes · ${done} done` : 'No topics yet'}
           {` · ${w.files.length} file${w.files.length === 1 ? '' : 's'} · ${w.card_count} flashcard${w.card_count === 1 ? '' : 's'}`}
         </span>
+        {w.recall_off && (
+          <button onClick={() => void toggleRecall()} className="ml-2 align-middle" title="Its cards don’t come up in recall, course review or due counts. Click to turn recall back on.">
+            <Pill>
+              <BellOff className="size-3" /> Recall off · turn on
+            </Pill>
+          </button>
+        )}
       </PageTitle>
 
       {w.topics.length > 0 && <ProgressBar value={done / w.topics.length} className="mb-8" />}
@@ -236,7 +267,7 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
           {!planning && w.topics.length > 0 && (
             <ol className="flex flex-col gap-2">
               {w.topics.map((t) => (
-                <TopicRow key={t.id} t={t} write={write} saveNote={saveNote} reload={reload} />
+                <TopicRow key={t.id} t={t} write={write} saveNote={saveNote} reload={reload} onTrim={() => setTrim({ topicId: t.id, title: t.content?.title ?? t.plan.title })} />
               ))}
             </ol>
           )}
@@ -313,6 +344,17 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
           )}
         </nav>
       )}
+      {trim && (
+        <TrimCardsModal
+          weekId={w.id}
+          topicId={trim.topicId}
+          title={trim.title}
+          onClose={() => {
+            setTrim(null)
+            reload()
+          }}
+        />
+      )}
     </Shell>
   )
 }
@@ -363,7 +405,7 @@ function FileRow({ f, canRemove, reload }: { f: CourseFile; canRemove: boolean; 
   )
 }
 
-function TopicRow({ t, write, saveNote, reload }: { t: Topic; write: (ids: string[]) => void; saveNote: (t: Topic) => void; reload: () => void }) {
+function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (ids: string[]) => void; saveNote: (t: Topic) => void; reload: () => void; onTrim: () => void }) {
   const go = useStore((s) => s.go)
   const jobs = useStore((s) => s.jobs)
   const job = runningJob(jobs, 'course_topic', 'topicId', t.id)
@@ -435,6 +477,11 @@ function TopicRow({ t, write, saveNote, reload }: { t: Topic; write: (ids: strin
                     <MenuItem icon={<RotateCcw className="size-4" />} onClick={() => (close(), void api.courses.resetProgress({ topicId: t.id }).then(reload))}>
                       Reset progress
                     </MenuItem>
+                    {t.card_count > 0 && (
+                      <MenuItem icon={<Scissors className="size-4" />} onClick={() => (close(), onTrim())}>
+                        Trim its recall cards…
+                      </MenuItem>
+                    )}
                     <MenuItem
                       icon={<RefreshCw className="size-4" />}
                       onClick={async () => {

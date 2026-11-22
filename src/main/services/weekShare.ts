@@ -18,7 +18,7 @@ import JSZip from 'jszip'
 import { getDb, now } from '../db'
 import { paths } from '../paths'
 import { safeFileName } from '../library'
-import { addWeek, createCourse, ensureWeekDeck, getCourse, syncTopicNote } from './course'
+import { addWeek, createCourse, ensureWeekDeck, fixTopicCardCounts, getCourse, syncTopicNote } from './course'
 
 export const WEEK_EXT = 'studyweek'
 const FORMAT = 1
@@ -207,6 +207,8 @@ export async function importWeek(file: string, target: { courseId: string } | { 
     const entry = zip.file(f.from)
     if (entry) writeFileSync(f.to, await entry.async('nodebuffer'))
   }
+  // Cards shared from an older version may lack their (n) point counts.
+  fixTopicCardCounts()
   // Each written topic gets its notes in your notes, like one you wrote yourself.
   for (const tp of topics) if (tp.status === 'ready') await syncTopicNote(String(tp.id)).catch(() => null)
   d.prepare('UPDATE courses SET updated_at = ? WHERE id = ?').run(t, courseId)

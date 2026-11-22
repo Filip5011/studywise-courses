@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download } from 'lucide-react'
+import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff } from 'lucide-react'
 import { importSharedWeek } from '../lib/weekShare'
 import type { CourseFull, WeekFull } from '@shared/course'
 import { useStore, toast } from '../lib/store'
@@ -201,6 +201,13 @@ function WeekRow({ c, w }: { c: CourseFull; w: WeekFull }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate font-semibold">{w.label}</span>
+            {w.recall_off && (
+              <span className="shrink-0" title="Recall is off for this week: its cards don’t come up in recall or review. Turn it back on from the week’s ⋯ menu.">
+                <Pill>
+                  <BellOff className="size-3" /> Recall off
+                </Pill>
+              </span>
+            )}
             {status && (
               <Pill tone={status.tone === 'muted' ? 'neutral' : status.tone}>{status.text}</Pill>
             )}
