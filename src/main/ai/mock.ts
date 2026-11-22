@@ -261,6 +261,13 @@ export function mockResponse(task: TaskId, mode: string, vars: Record<string, un
       }
       return { text: JSON.stringify(out), structured: out }
     }
+    case 'course_trim': {
+      // Suggests the cards that test an example or a company, like the real thing would.
+      const lines = v('cards').split('\n').filter((l) => /^\d+\./.test(l))
+      const remove = lines.filter((l) => /example|compan|imagine/i.test(l)).map((l) => ({ n: Number(l.match(/^(\d+)\./)![1]), reason: 'an example, not examinable' }))
+      const out = { remove }
+      return { text: JSON.stringify(out), structured: out }
+    }
     case 'course_mark': {
       const exp = new Set(words(v('model')))
       const got = new Set(words(v('answer')).filter((w) => exp.has(w)))

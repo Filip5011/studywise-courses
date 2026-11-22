@@ -467,7 +467,13 @@ export const handlers = {
       return { file, ...(await weekShare.previewWeek(file)) }
     }),
     /** Add a shared week to one of your courses, or to a new course. */
-    importWeek: h(z.object({ file: z.string().min(1), courseId: z.string().nullable() }), (i) => weekShare.importWeek(i.file, i.courseId ? { courseId: i.courseId } : { newCourse: true }))
+    importWeek: h(z.object({ file: z.string().min(1), courseId: z.string().nullable() }), (i) => weekShare.importWeek(i.file, i.courseId ? { courseId: i.courseId } : { newCourse: true })),
+    /** Which of a week's (or a topic's) recall cards aren't worth keeping. Only card text is sent. */
+    suggestTrim: h(z.object({ weekId: id, topicId: z.string().optional() }), (i) => course.suggestTrim(i.weekId, i.topicId)),
+    /** Remove recall cards you picked, from the deck and from their topics. */
+    removeCards: h(z.object({ cardIds: z.array(id).max(2000) }), (i) => course.removeTopicCards(i.cardIds)),
+    /** Turn a week's recall on or off (its cards stay). */
+    setWeekRecall: h(z.object({ weekId: id, on: z.boolean() }), (i) => course.setWeekRecall(i.weekId, i.on))
   },
 
   sync: {
