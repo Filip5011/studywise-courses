@@ -282,9 +282,12 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="text-[1.1rem] font-semibold tracking-tight">Files</h2>
             {!planning && !IS_MOBILE && (
-              <Button size="sm" variant="ghost" onClick={addFiles}>
-                <Plus className="size-4" /> Add files
-              </Button>
+              <span className="flex items-center gap-2">
+                <span className="hidden text-[0.82rem] text-muted sm:inline">or drop files (or a shared week) on this page</span>
+                <Button size="sm" variant="ghost" onClick={addFiles}>
+                  <Plus className="size-4" /> Add files
+                </Button>
+              </span>
             )}
           </div>
           {w.files.length > 0 ? (
@@ -299,7 +302,7 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
             <button onClick={addFiles} className="flex w-full flex-col items-center gap-1 rounded-xl border-2 border-dashed border-line px-5 py-6 text-center transition-colors hover:border-accent">
               <Upload className="size-5 text-muted" />
               <span className="font-semibold">Add {w.label}’s files</span>
-              <span className="text-[0.88rem] text-muted">Slides, lecture transcripts, readings</span>
+              <span className="text-[0.88rem] text-muted">Slides, lecture transcripts, readings or pictures, or a week a friend shared. Click, or drop them anywhere on this page.</span>
             </button>
           )}
         </section>

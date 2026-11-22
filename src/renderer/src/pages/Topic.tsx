@@ -13,7 +13,7 @@ import {
 } from '@shared/course'
 import type { Mark } from '@shared/questions'
 import type { Card } from '@shared/types'
-import { useStore, toast } from '../lib/store'
+import { useStore, toast, rememberCoursesPlace } from '../lib/store'
 import { IS_MOBILE } from '../lib/platform'
 import { api, errorText, streamCall } from '../lib/api'
 import { Markdown } from '../components/Markdown'
@@ -78,6 +78,27 @@ function withRetry(steps: Step[], at: number): Step[] {
   return insertRetry(steps, at, { ...s, retry: (s.retry ?? 0) + 1 }, summary === -1 ? steps.length : summary).list
 }
 
+/** Where you are in a set of key-term cards: the pile still to go, and how often each came back. */
+interface CardsState {
+  queue: number[]
+  tries: Record<number, number>
+}
+
+/**
+ * Learning sessions kept while the app is open: leave a topic (another tab, the
+ * course page) and come back, and you carry on exactly where you were, answers,
+ * questions to try again and the card pile included. Across restarts the saved
+ * step (progress.step) is the fallback.
+ */
+interface TopicSession {
+  content: string
+  steps: Step[]
+  at: number
+  slots: Record<number, Slot>
+  cards: Record<number, CardsState>
+}
+const sessions = new Map<string, TopicSession>()
+
 export function TopicPage({ id, section, test = false }: { id: string; section?: number; test?: boolean }) {
   const go = useStore((s) => s.go)
   const openExplain = useStore((s) => s.openExplain)
@@ -90,6 +111,9 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
   const [notesOpen, setNotesOpen] = useState(false)
   const [rewriteOpen, setRewriteOpen] = useState(false)
   const progress = useRef<TopicProgress | null>(null)
+  const sessionKey = `${id}:${test ? 'test' : 'learn'}`
+  const cards = useRef<Record<number, CardsState>>({})
+  const contentKey = useRef('')
 
   useEffect(() => {
     let alive = true
@@ -99,8 +123,27 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
         if (!alive) return
         if (!t.content) throw new Error('This topic hasn’t been written yet.')
         if (test && !t.content.check.length) throw new Error('This topic has no test questions. Write it again to get some.')
-        const s = buildSteps(t, test)
         const p = t.progress
+        contentKey.current = JSON.stringify(t.content)
+        // Carry on exactly where you were, unless you picked a section, the topic was
+        // rewritten, or its progress was reset since.
+        const kept = sessions.get(sessionKey)
+        const reset = !test && !p.done && p.section === 0 && !p.step && !p.lastStudied
+        if (kept && section === undefined && kept.content === contentKey.current && !reset) {
+          progress.current = { ...p }
+          cards.current = kept.cards
+          setTopic(t)
+          setSteps(kept.steps)
+          setAt(kept.at)
+          // An answer still being marked when you left is asked again.
+          setSlots(Object.fromEntries(Object.entries(kept.slots).map(([k, v]) => [k, v.marking ? { ...v, marking: false, answer: null } : v])))
+          const c = await api.courses.get({ id: t.course_id })
+          if (alive) setSiblings(c.weeks.flatMap((w) => w.topics))
+          return
+        }
+        sessions.delete(sessionKey)
+        cards.current = {}
+        const s = buildSteps(t, test)
         // Open at the section picked on the week page, or resume where you left off; a
         // finished topic starts over. A test always starts at the beginning.
         let start = 0
@@ -125,6 +168,18 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
       alive = false
     }
   }, [id, section, test])
+
+  // Keep the session up to date as you go; a finished one is let go, so Again starts over.
+  useEffect(() => {
+    if (!topic || !steps.length) return
+    if (steps[at]?.kind === 'summary') {
+      sessions.delete(sessionKey)
+      // Done: the Courses tab goes back to the week rather than into a finished topic.
+      rememberCoursesPlace({ name: 'week', courseId: topic.course_id, weekId: topic.week_id })
+      return
+    }
+    sessions.set(sessionKey, { content: contentKey.current, steps, at, slots, cards: cards.current })
+  }, [topic, steps, at, slots, sessionKey])
 
   const step = steps[at]
   const slot = slots[at] ?? emptySlot()
@@ -332,7 +387,21 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
       <div className={cx('mx-auto w-full max-w-[860px] flex-1', IS_MOBILE ? 'mt-4' : 'mt-7')}>
         {step.kind === 'notes' && <NotesStep key={at} section={content.sections[step.section]} first={step.section === 0} goal={content.goal} onNext={next} onAsk={() => askAbout(content.sections[step.section])} />}
 
-        {step.kind === 'cards' && <CardsStep key={at} cards={content.sections[step.section].cards ?? []} section={content.sections[step.section]} topicId={topic.id} onNext={next} onBack={back} />}
+        {step.kind === 'cards' && (
+          <CardsStep
+            key={at}
+            cards={content.sections[step.section].cards ?? []}
+            section={content.sections[step.section]}
+            topicId={topic.id}
+            saved={cards.current[at]}
+            onSave={(st) => {
+              cards.current = { ...cards.current, [at]: st }
+              sessions.set(sessionKey, { content: contentKey.current, steps, at, slots, cards: cards.current })
+            }}
+            onNext={next}
+            onBack={back}
+          />
+        )}
 
         {step.kind === 'recall' && <RecallStep key={at} courseId={topic.course_id} topicId={topic.id} onNext={next} />}
 
@@ -563,14 +632,44 @@ const MAX_CARD_TRIES = 4
  * rate yourself; ratings feed spaced repetition. "Didn't know" or "Sort of"
  * sends the card to the back of the pile until you know it, and lets you choose
  * how to go over it: move on, re-read the section's notes (no AI), or have
- * Claude explain it in depth (one AI call, only when you ask). Keys: Space/↩
- * flip and continue, 1–3 rate, N notes, E explain with AI.
+ * Claude explain it in depth (one AI call, only when you ask). Keys: Space
+ * turns the card over and back (as often as you like), ↩ shows the answer then
+ * continues, 1–3 rate, N notes, E explain with AI.
  */
-function CardsStep({ cards, section, topicId, onNext, onBack }: { cards: { front: string; back: string; id?: string }[]; section: TopicSection; topicId: string; onNext: () => void; onBack: () => void }) {
+function CardsStep({
+  cards,
+  section,
+  topicId,
+  saved,
+  onSave,
+  onNext,
+  onBack
+}: {
+  cards: { front: string; back: string; id?: string }[]
+  section: TopicSection
+  topicId: string
+  /** Where you were in this pile, if you left and came back. */
+  saved?: CardsState
+  onSave: (s: CardsState) => void
+  onNext: () => void
+  onBack: () => void
+}) {
   // Card indexes still to go; ones you don't know yet go back on the end.
-  const [queue, setQueue] = useState(() => cards.map((_, i) => i))
-  const [tries, setTries] = useState<Record<number, number>>({})
+  const [queue, setQueue] = useState(() => (saved?.queue.length ? saved.queue.filter((i) => i < cards.length) : cards.map((_, i) => i)))
+  const [tries, setTries] = useState<Record<number, number>>(() => saved?.tries ?? {})
+  useEffect(() => onSave({ queue, tries }), [queue, tries])
   const [flipped, setFlipped] = useState(false)
+  // Seen the answer at least once: you can then rate it, and turn the card over as often as you like.
+  const [revealed, setRevealed] = useState(false)
+  const turn = () =>
+    setFlipped((f) => {
+      if (!f) setRevealed(true)
+      return !f
+    })
+  const reveal = () => {
+    setFlipped(true)
+    setRevealed(true)
+  }
   const [rated, setRated] = useState<CardRating | null>(null)
   const [explanation, setExplanation] = useState<string | null>(null)
   const [explaining, setExplaining] = useState(false)
@@ -589,6 +688,7 @@ function CardsStep({ cards, section, topicId, onNext, onBack }: { cards: { front
     setTries({ ...tries, [idx]: n })
     setQueue(next)
     setFlipped(false)
+    setRevealed(false)
     setRated(null)
     setExplanation(null)
     setView('card')
@@ -616,7 +716,7 @@ function CardsStep({ cards, section, topicId, onNext, onBack }: { cards: { front
   }
 
   const rate = (r: CardRating) => {
-    if (!flipped || rated) return
+    if (!revealed || rated) return
     void api.courses.rateCard({ topicId, front: card.front, cardId: card.id, rating: r }).catch(() => {})
     if (r === 3) return advance(r)
     setRated(r)
@@ -626,11 +726,15 @@ function CardsStep({ cards, section, topicId, onNext, onBack }: { cards: { front
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement
       if (e.metaKey || e.ctrlKey || e.altKey || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || document.querySelector('[data-modal]')) return
-      if (e.key === 'Enter' || e.key === ' ') {
+      // Space turns the card over (and back); Enter shows the answer, then moves on once rated.
+      if (e.key === ' ') {
         e.preventDefault()
-        if (!flipped) setFlipped(true)
+        turn()
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        if (!revealed) reveal()
         else if (rated && !explaining) advance(rated)
-      } else if (flipped && !rated && ['1', '2', '3'].includes(e.key)) rate(Number(e.key) as CardRating)
+      } else if (revealed && !rated && ['1', '2', '3'].includes(e.key)) rate(Number(e.key) as CardRating)
       else if (e.key === 'b' || e.key === 'B') goBack()
       else if (rated && (e.key === 'n' || e.key === 'N')) setView('notes')
       else if (rated && (e.key === 'e' || e.key === 'E')) void explain(rated)
@@ -729,9 +833,9 @@ function CardsStep({ cards, section, topicId, onNext, onBack }: { cards: { front
       {/* A div, not a button: a focused button would also react to the keys the step handles. */}
       <div
         role="button"
-        onClick={() => !flipped && setFlipped(true)}
-        className={cx('flex min-h-[220px] flex-col items-stretch rounded-xl border border-line bg-surface p-[clamp(18px,3.4vw,36px)] text-left transition-colors', !flipped && 'cursor-pointer hover:border-[color-mix(in_oklab,var(--ink)_22%,transparent)]')}
-        title={flipped ? undefined : 'Show the answer'}
+        onClick={turn}
+        className="flex min-h-[220px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-surface p-[clamp(18px,3.4vw,36px)] text-left transition-colors hover:border-[color-mix(in_oklab,var(--ink)_22%,transparent)]"
+        title={flipped ? 'Turn back to the question (space)' : 'Show the answer (space)'}
       >
         <Markdown className="text-[clamp(1.2rem,2.4vw,1.6rem)] leading-snug font-semibold">{card.front}</Markdown>
         {flipped ? (
@@ -739,12 +843,13 @@ function CardsStep({ cards, section, topicId, onNext, onBack }: { cards: { front
             <Markdown className="text-[1.05rem] leading-relaxed">{card.back}</Markdown>
           </div>
         ) : (
-          <span className="mt-auto pt-6 text-[0.9rem] text-muted">Say the answer in your head first, then tap to check</span>
+          <span className="mt-auto pt-6 text-[0.9rem] text-muted">{revealed ? 'Tap or press space to see the answer again' : 'Say the answer in your head first, then tap to check'}</span>
         )}
+        {flipped && <span className="mt-auto pt-4 text-[0.8rem] text-muted">Tap or press space to turn it back over</span>}
       </div>
 
-      {!flipped ? (
-        <Button variant="primary" size="lg" className="self-start" onClick={() => setFlipped(true)}>
+      {!revealed ? (
+        <Button variant="primary" size="lg" className="self-start" onClick={reveal}>
           Show answer <Kbd className="ml-1 border-current/30">↩</Kbd>
         </Button>
       ) : rated ? (
