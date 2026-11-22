@@ -3,6 +3,7 @@ import type { Card, CardInput, Deck, Folder, Note, ReviewState, ModelChoice, Lea
 import { CardInput as CardInputSchema } from '@shared/types'
 import { parseRequiredPoints, countBlanks } from '@shared/ssText'
 import { isDue, masteryOf } from '@shared/sm2'
+import { examPhase, effectiveDue, examAdjustedDue } from '@shared/course'
 import { schedule, newState, withDefaults, DEFAULT_SCHEDULER, type SchedulerKind } from '@shared/scheduler'
 
 // ---------- settings ----------
@@ -342,6 +343,9 @@ export function applyReview(cardId: string, rating: 1 | 2 | 3 | 4, source: 'flas
   const cur = existing ? withDefaults(existing) : newState(at)
   const kind = getSetting<SchedulerKind>('review.scheduler', DEFAULT_SCHEDULER)
   const s = schedule(kind, cur, rating, at)
+  // A course card's next review follows its exam: further out while it's far off,
+  // closer in during revision, never after the last look before it.
+  s.due = examAdjustedDue(s.due, at, examDateOfDeck(card.deck_id))
   const next = {
     card_id: cardId,
     ease: s.ease,
@@ -358,28 +362,75 @@ export function applyReview(cardId: string, rating: 1 | 2 | 3 | 4, source: 'flas
   d.transaction(() => {
     writeReviewState(next)
     d.prepare('INSERT INTO review_log (card_id, deck_id, rating, source, at) VALUES (?, ?, ?, ?, ?)').run(cardId, card.deck_id, rating, source, at.toISOString())
+    // Rating a card means you've met it: it's in spaced review from now on.
+    d.prepare('UPDATE cards SET dormant = 0 WHERE id = ? AND dormant = 1').run(cardId)
   })()
   return next
 }
+/** Cards still waiting for you to study their topic (see course.refreshDormancy). */
+function dormantIds(deckId?: string): Set<string> {
+  const rows = (deckId ? getDb().prepare('SELECT id FROM cards WHERE dormant = 1 AND deck_id = ?').all(deckId) : getDb().prepare('SELECT id FROM cards WHERE dormant = 1').all()) as { id: string }[]
+  return new Set(rows.map((r) => r.id))
+}
+
+/** The exam date of the course a deck belongs to (its week deck), if any. */
+function examDateOfDeck(deckId: string): string | null {
+  const r = getDb().prepare('SELECT c.exam_date FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.deck_id = ?').get(deckId) as { exam_date: string | null } | undefined
+  return r?.exam_date ?? null
+}
+
+/** Exam dates of every course week deck that has one. */
+function examDatesByDeck(): Map<string, string> {
+  const rows = getDb().prepare('SELECT w.deck_id, c.exam_date FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.deck_id IS NOT NULL AND c.exam_date IS NOT NULL').all() as { deck_id: string; exam_date: string }[]
+  return new Map(rows.map((r) => [r.deck_id, r.exam_date]))
+}
+
+/** Due, counting a course's revision ramp (see effectiveDue). */
+function dueWithExam(state: Pick<ReviewState, 'due' | 'last_reviewed'> | null | undefined, examDate: string | null | undefined, now: Date): boolean {
+  if (!state) return isDue(state, now)
+  return isDue({ due: effectiveDue(state.due, state.last_reviewed ?? null, examDate, now) }, now)
+}
+
+/**
+ * Course week decks that don't count towards what's due right now: weeks with
+ * recall turned off, and courses whose exam is over.
+ */
+export function restingDeckIds(now = new Date()): Set<string> {
+  const rows = getDb().prepare('SELECT w.deck_id, w.recall_off, c.exam_date FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.deck_id IS NOT NULL').all() as { deck_id: string; recall_off: number; exam_date: string | null }[]
+  const out = new Set<string>()
+  for (const r of rows) if (r.recall_off || examPhase(r.exam_date, now).phase === 'over') out.add(r.deck_id)
+  return out
+}
+
 export function dueCards(deckId: string, now = new Date()): Card[] {
-  const cards = listCards(deckId)
+  const sleeping = dormantIds(deckId)
+  const cards = listCards(deckId).filter((c) => !sleeping.has(c.id))
   const states = new Map(
     (getDb().prepare('SELECT r.* FROM review_state r JOIN cards c ON c.id = r.card_id WHERE c.deck_id = ?').all(deckId) as ReviewState[]).map((s) => [
       s.card_id,
       s
     ])
   )
+  const exam = examDateOfDeck(deckId)
   return cards
-    .filter((c) => isDue(states.get(c.id), now))
+    .filter((c) => dueWithExam(states.get(c.id), exam, now))
     .sort((a, b) => (states.get(a.id)?.due ?? '').localeCompare(states.get(b.id)?.due ?? ''))
 }
-/** Due cards per deck. Decks of course weeks with recall turned off count none. */
+/**
+ * Due cards per deck. Resting course weeks (recall off, or the exam far off or
+ * over) count none, and neither do cards from topics you haven't studied yet.
+ */
 export function dueCountsByDeck(now = new Date()): Map<string, number> {
+  const resting = restingDeckIds(now)
+  const exams = examDatesByDeck()
   const rows = getDb()
-    .prepare('SELECT c.deck_id, r.due FROM cards c LEFT JOIN review_state r ON r.card_id = c.id WHERE c.deck_id NOT IN (SELECT deck_id FROM weeks WHERE recall_off = 1 AND deck_id IS NOT NULL)')
-    .all() as { deck_id: string; due: string | null }[]
+    .prepare('SELECT c.deck_id, c.dormant, r.due, r.last_reviewed FROM cards c LEFT JOIN review_state r ON r.card_id = c.id')
+    .all() as { deck_id: string; dormant: number; due: string | null; last_reviewed: string | null }[]
   const m = new Map<string, number>()
-  for (const r of rows) if (isDue(r.due ? { due: r.due } : null, now)) m.set(r.deck_id, (m.get(r.deck_id) ?? 0) + 1)
+  for (const r of rows) {
+    if (resting.has(r.deck_id) || r.dormant) continue
+    if (dueWithExam(r.due ? { due: r.due, last_reviewed: r.last_reviewed } : null, exams.get(r.deck_id), now)) m.set(r.deck_id, (m.get(r.deck_id) ?? 0) + 1)
+  }
   return m
 }
 export function totalDueToday(): number {
@@ -396,7 +447,9 @@ export function deckStats(deckId: string) {
       s
     ])
   )
-  const due = cards.filter((c) => isDue(states.get(c.id))).length
+  const sleeping = dormantIds(deckId)
+  const exam = examDateOfDeck(deckId)
+  const due = cards.filter((c) => !sleeping.has(c.id) && dueWithExam(states.get(c.id), exam, new Date())).length
   const mastery = cards.length ? cards.reduce((a, c) => a + masteryOf(states.get(c.id)), 0) / cards.length : 0
   const days: { date: string; count: number }[] = []
   const today = new Date()
