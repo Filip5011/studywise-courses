@@ -133,8 +133,11 @@ Rules:
 "check": the topic test, which I take separately from memory (no notes), maybe days later: 5–8 mixed questions across the whole topic, a bit harder than the section questions. Each must make sense without the notes in front of me. Include at least one explain question and at least one scenario.
 
 == RECALL CARDS ==
-"cards": 8–15 flashcards for this topic. I see each section's cards straight after its notes and before its questions, so I know the key definitions before I'm tested on them. They're also used later for spaced repetition and surprise recall questions, so each card must make sense completely on its own: no "according to the above" or "in this topic". Short "front", short "back" (bullets are fine). Cover the definitions, key lists, contrasts and anything stressed.
-- "section": the number (1, 2, 3…) of the section that teaches the card. Every key term a section introduces gets a card in that section, so most sections have 1–3 cards.
+"cards": the few flashcards worth keeping for the exam, usually 4–8 for the whole topic (fewer for a short topic, never more than 10). I see each section's cards straight after its notes and before its questions, and they go into spaced repetition for the rest of the course, so every card has to earn its place. Each card must make sense completely on its own: no "according to the above" or "in this topic". Short "front", short "back".
+- Only what I'd be expected to recall in the exam: definitions of the key terms, key lists and steps, important contrasts, formulas, and anything the lecturer stressed.
+- No cards for examples, case studies, companies or people used as illustrations, analogies, "Imagine…" stories, history, side remarks, anything not examinable, or "wrong idea vs correct idea" (that belongs in the notes). One card per idea: don't ask the same thing two ways.
+- When the back is a list, use "- " bullets, one point per bullet, and end the front with the number of bullets in brackets: "What are the three places an operand can be? (3)". A one-line answer has no number.
+- "section": the number (1, 2, 3…) of the section that teaches the card. A section with nothing exam-worthy has no cards.
 - A card only uses what its section, or an earlier one, has taught.
 `,
     user_template: `You're teaching me one topic from {{module}}. I'm a {{level}} student. The sources for this topic are attached or included below. Here's the course outline:
@@ -165,6 +168,31 @@ My answer: {{answer}}
 - "got": the key points I hit. "missed": the ones I didn't.
 - "wrong": if I said something wrong, say what it was and correct it in one line. Otherwise empty.
 - "feedback": in my note style: casual, short, talking to me as "you", 2–4 sentences. Start with what I got right.`,
+    is_default: true
+  },
+  {
+    builtin_key: 'course.trim',
+    task: 'course_trim',
+    name: 'Trim recall cards',
+    output_mode: 'json',
+    // Only the cards' text is sent (no slides), so this is cheap.
+    system: `You go through a student's recall flashcards for one week of a course and pick out the ones that aren't worth keeping for the exam. You reply with JSON only.
+
+Keep a card when it tests something the student would be expected to recall in the exam: the definition of a key term, a key list or the steps of a process, an important contrast, a formula, or anything the lecturer stressed.
+
+Suggest removing a card when it:
+- tests an example, case study, or a company, product or person only used as an illustration
+- tests an analogy, an "Imagine…" story, history or a side remark
+- is a "wrong idea vs correct idea" card, or only makes sense with the notes in front of you
+- asks the same thing as another card (keep the better one)
+- tests trivia nobody would be asked in an exam
+
+When unsure, keep it. Never suggest removing more than half of the cards.
+
+"remove": one entry per card to remove, with "n" (its number in the list) and "reason" (a few words, e.g. "an example, not examinable", "same as 12").`,
+    user_template: `These are my recall cards for one week of {{module}}. I'm a {{level}} student. Which aren't worth keeping for the exam?
+
+{{cards}}`,
     is_default: true
   }
 ]

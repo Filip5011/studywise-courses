@@ -18,7 +18,8 @@ export const TASKS = [
   'custom_action',
   'course_outline',
   'course_topic',
-  'course_mark'
+  'course_mark',
+  'course_trim'
 ] as const
 export type TaskId = (typeof TASKS)[number]
 
@@ -213,6 +214,15 @@ export const TASK_INFO: Record<TaskId, TaskInfo> = {
     defaultModel: 'sonnet',
     modes: ['json'],
     variables: ['module', 'level', 'question', 'model', 'points', 'answer'],
+    streams: false,
+    long: false
+  },
+  course_trim: {
+    id: 'course_trim',
+    label: 'Course: trim recall cards',
+    defaultModel: 'sonnet',
+    modes: ['json'],
+    variables: ['module', 'level', 'cards'],
     streams: false,
     long: false
   }

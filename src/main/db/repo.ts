@@ -373,9 +373,10 @@ export function dueCards(deckId: string, now = new Date()): Card[] {
     .filter((c) => isDue(states.get(c.id), now))
     .sort((a, b) => (states.get(a.id)?.due ?? '').localeCompare(states.get(b.id)?.due ?? ''))
 }
+/** Due cards per deck. Decks of course weeks with recall turned off count none. */
 export function dueCountsByDeck(now = new Date()): Map<string, number> {
   const rows = getDb()
-    .prepare('SELECT c.deck_id, r.due FROM cards c LEFT JOIN review_state r ON r.card_id = c.id')
+    .prepare('SELECT c.deck_id, r.due FROM cards c LEFT JOIN review_state r ON r.card_id = c.id WHERE c.deck_id NOT IN (SELECT deck_id FROM weeks WHERE recall_off = 1 AND deck_id IS NOT NULL)')
     .all() as { deck_id: string; due: string | null }[]
   const m = new Map<string, number>()
   for (const r of rows) if (isDue(r.due ? { due: r.due } : null, now)) m.set(r.deck_id, (m.get(r.deck_id) ?? 0) + 1)

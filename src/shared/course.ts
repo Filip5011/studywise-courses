@@ -79,6 +79,12 @@ export const CourseMarkOut = z.object({
 })
 export type CourseMarkOut = z.infer<typeof CourseMarkOut>
 
+/** Which recall cards aren't worth keeping, by their number in the list sent. */
+export const CourseTrimOut = z.object({
+  remove: z.array(z.object({ n: z.number().int(), reason: z.string().default('') })).default([])
+})
+export type CourseTrimOut = z.infer<typeof CourseTrimOut>
+
 // ---------------------------------------------------------------------------
 // What the app stores
 
@@ -162,6 +168,8 @@ export interface Week {
   error: string | null
   /** This week's recall-card deck, in the course's folder. */
   deck_id: string | null
+  /** Recall turned off: its cards stay, but don't come up in recall, course review or due counts. */
+  recall_off: boolean
   created_at: string
 }
 

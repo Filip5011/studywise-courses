@@ -247,7 +247,10 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE courses ADD COLUMN deck_folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL;
   ALTER TABLE weeks ADD COLUMN deck_id TEXT REFERENCES decks(id) ON DELETE SET NULL;
   `,
-  /* 6: syncing with the phone app (change log filled by triggers) */ SYNC_SCHEMA_SQL
+  /* 6: syncing with the phone app (change log filled by triggers) */ SYNC_SCHEMA_SQL,
+  /* 7: recall can be turned off for a week */ `
+  ALTER TABLE weeks ADD COLUMN recall_off INTEGER NOT NULL DEFAULT 0;
+  `
 ]
 
 export function migrate(db: Database.Database): number {
