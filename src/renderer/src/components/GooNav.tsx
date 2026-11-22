@@ -114,7 +114,9 @@ export function GooNav() {
   }, [])
 
   const navTo = (r: Route) => {
-    go(r)
+    // Courses goes back to where you were in it (mid-topic, say), like a tab.
+    if (r.name === 'courses') useStore.getState().goCourses()
+    else go(r)
     setOpen(false)
   }
 

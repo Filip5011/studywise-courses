@@ -2,7 +2,7 @@ import { useEffect, useState, lazy, Suspense } from 'react'
 import { AlertTriangle, X, FileUp, NotebookPen, Layers, Terminal, GraduationCap, Download } from 'lucide-react'
 import type { UpdateStatus } from '@shared/update'
 import { planUsageText } from '@shared/types'
-import { importSharedWeek } from './lib/weekShare'
+import { importSharedWeek, dropOnWeek } from './lib/weekShare'
 
 /** Jobs already announced as done, and those whose plan usage was shown. */
 const announced = new Set<string>()
@@ -195,7 +195,7 @@ export function App() {
     {
       'go.home': () => go({ name: 'home' }),
       'go.decks': () => go({ name: 'decks' }),
-      'go.courses': () => go({ name: 'courses' }),
+      'go.courses': () => useStore.getState().goCourses(),
       'go.notes': () => go({ name: 'notes', id: (useStore.getState().route as { id?: string }).id ?? null }),
       'go.jobs': () => go({ name: 'jobs' }),
       'view.jobs': () => go({ name: 'jobs' }),
@@ -314,6 +314,15 @@ export function App() {
       const all = [...(e.dataTransfer?.files ?? [])].map((f) => window.studywise.pathForFile(f))
       // A library export dropped on the window is imported (added to this library).
       // A week a friend shared: ask which course it goes in.
+      // On a week's page, files go straight into that week (a shared week merges into it).
+      const here = useStore.getState().route
+      if (here.name === 'week') {
+        void api.courses
+          .get({ id: here.courseId })
+          .then((c) => dropOnWeek(here.weekId, c.weeks.find((w) => w.id === here.weekId)?.label ?? 'this week', all))
+          .catch((err) => toast(errorText(err), 'bad'))
+        return
+      }
       const week = all.find((p) => /\.studyweek$/i.test(p))
       if (week) return void importSharedWeek({ file: week })
       const lib = all.find((p) => /\.studywise$/i.test(p))
@@ -386,8 +395,17 @@ export function App() {
         <div className="fade-in pointer-events-none fixed inset-3 z-[70] grid place-items-center rounded-xl border-4 border-dashed border-accent bg-accent-soft/80 backdrop-blur-sm">
           <div className="pop-in flex flex-col items-center gap-3 text-center">
             <FileUp className="size-12 text-accent" />
-            <div className="text-2xl font-semibold">Drop to make a course, notes or flashcards</div>
-            <div className="text-muted">PDF, Word, PowerPoint, text or Markdown</div>
+            {route.name === 'week' ? (
+              <>
+                <div className="text-2xl font-semibold">Drop to add to this week</div>
+                <div className="text-muted">Slides, transcripts, readings or pictures (PDF, Word, PowerPoint, text, Markdown, web pages, RTF, CSV, images), or a shared .studyweek</div>
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-semibold">Drop to make a course, notes or flashcards</div>
+                <div className="text-muted">PDF, Word, PowerPoint, text or Markdown</div>
+              </>
+            )}
           </div>
         </div>
       )}
