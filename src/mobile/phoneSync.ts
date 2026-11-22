@@ -71,6 +71,8 @@ export function onStatus(fn: (s: PhoneSyncStatus) => void): () => void {
 
 function deviceName(): string {
   const ua = navigator.userAgent
+  if (/iPad/.test(ua)) return 'iPad'
+  if (/iPhone/.test(ua)) return 'iPhone'
   const m = /Android [\d.]+; ([^;)]+?)(?: Build|\))/.exec(ua)
   return m ? m[1].trim() : /Android/.test(ua) ? 'Android phone' : 'Phone'
 }
