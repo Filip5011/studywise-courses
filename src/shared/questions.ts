@@ -34,6 +34,51 @@ export const QuestionPayloads = {
 
 export type PayloadOf<T extends QuestionType> = z.infer<(typeof QuestionPayloads)[T]>
 
+function shuffleList<T>(arr: T[], rand: () => number): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
+/** A small seeded random number generator, so a reshuffle stays put across re-renders. */
+export function seededRandom(seed: string): () => number {
+  let h = 2166136261
+  for (const ch of seed) h = Math.imul(h ^ ch.charCodeAt(0), 16777619)
+  return () => {
+    h = Math.imul(h ^ (h >>> 15), 2246822507)
+    h = Math.imul(h ^ (h >>> 13), 3266489909)
+    return ((h ^= h >>> 16) >>> 0) / 4294967296
+  }
+}
+
+/**
+ * The same Learn question with its answers in new places, for when a missed
+ * question comes back: multiple-choice options move (the right one always
+ * moves), and choices, sort items and match columns are reshuffled. The id
+ * changes too, so components that shuffle by id shuffle differently.
+ */
+export function reshuffleLearnQuestion(q: LearnQuestion, seed: string): LearnQuestion {
+  const rand = seededRandom(`${q.id}:${seed}`)
+  const id = `${q.id}~${seed}`
+  switch (q.type) {
+    case 'multiple_choice': {
+      const { options, correct_index } = q.payload
+      let order = shuffleList(options.map((_, i) => i), rand)
+      if (options.length > 1 && order.indexOf(correct_index) === correct_index) order = [...order.slice(1), order[0]]
+      return { ...q, id, payload: { ...q.payload, options: order.map((i) => options[i]), correct_index: order.indexOf(correct_index) } }
+    }
+    case 'choice_blank':
+      return { ...q, id, payload: { ...q.payload, choices: q.payload.choices.map((c) => shuffleList(c, rand)) } }
+    case 'categorize':
+      return { ...q, id, payload: { ...q.payload, items: shuffleList(q.payload.items, rand) } }
+    default:
+      return { ...q, id }
+  }
+}
+
 export type LearnQuestion = {
   [K in QuestionType]: { id: string; type: K; card_id: string; card_ids: string[]; payload: PayloadOf<K>; cached: boolean }
 }[QuestionType]

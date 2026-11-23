@@ -84,9 +84,16 @@ describe('learn sessions (AI_MOCK)', () => {
     expect(repo.getReviewState(mc.card_id)?.lapses).toBe(1)
     const fb = await learn.feedbackFor(r.attemptId)
     expect(fb.kind).toBe('wrong')
+    const wrongState = repo.getReviewState(mc.card_id)
     const o = learn.overrideAttempt(r.attemptId)
     expect(o.verdict).toBe('correct')
     expect(repo.getReviewState(mc.card_id)?.lapses).toBe(0)
+    // "I was right" can be undone: the first mark and its schedule come back.
+    const u = learn.undoOverride(r.attemptId)
+    expect(u.verdict).toBe(r.mark.verdict)
+    expect(repo.getReviewState(mc.card_id)).toEqual(wrongState)
+    expect(() => learn.undoOverride(r.attemptId)).toThrow()
+    expect(learn.overrideAttempt(r.attemptId).verdict).toBe('correct')
 
     const free = qs[2]
     const fr = await learn.submitAnswer(sessionId, deckId, free, { type: 'free_answer', text: 'one two' })

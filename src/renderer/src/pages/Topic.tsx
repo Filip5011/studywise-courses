@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { X, Lightbulb, CheckCircle2, XCircle, CircleDot, BookOpen, Trophy, Brain, ArrowRight, Sparkles, Shuffle, NotebookPen, RotateCcw, RefreshCw, HelpCircle, ClipboardCheck, ArrowLeft } from 'lucide-react'
+import { X, Lightbulb, CheckCircle2, XCircle, CircleDot, BookOpen, Trophy, Brain, ArrowRight, Sparkles, Shuffle, NotebookPen, RotateCcw, RefreshCw, HelpCircle, ClipboardCheck, ArrowLeft, Undo2 } from 'lucide-react'
 import {
   COURSE_QUESTION_LABELS,
+  NOTE_LEVELS,
+  NOTE_LEVEL_INFO,
   expectedText,
   markCourseAnswer,
   questionText,
+  reshuffleQuestion,
+  shuffleMcqs,
   type CourseAnswer,
+  type NoteLevel,
   type CourseQuestion,
   type Topic,
   type TopicProgress,
@@ -20,6 +25,7 @@ import { Markdown } from '../components/Markdown'
 import { Button, Dots, Kbd, Modal, Pill, Textarea, cx } from '../components/ui'
 import { CourseQuestionView } from '../learn/CourseQuestions'
 import { insertRetry } from '@shared/retry'
+import { GREENS_TO_PASS, RED_GAP, nextPile, type PileRating } from '@shared/cardPile'
 import { SUBMIT_EVENT } from '../learn/Questions'
 
 /** Chance of a surprise recall card from another topic after a section. */
@@ -42,6 +48,8 @@ interface Slot {
   hint: boolean
   correction: string
   overridden: boolean
+  /** The mark before "I was right", so it can be undone. */
+  before?: Mark | null
   /** Already queued to come back, so going back and continuing again doesn't add it twice. */
   requeued?: boolean
 }
@@ -51,16 +59,17 @@ const emptySlot = (): Slot => ({ answer: null, mark: null, marking: false, hint:
 function buildSteps(t: Topic, test: boolean): Step[] {
   const c = t.content!
   const steps: Step[] = []
+  // Answers go in new places every time you do the topic or the test again.
   if (test) {
     steps.push({ kind: 'check_intro' })
-    c.check.forEach((q, j) => steps.push({ kind: 'q', section: -1, index: j, q }))
+    shuffleMcqs(c.check).forEach((q, j) => steps.push({ kind: 'q', section: -1, index: j, q }))
     steps.push({ kind: 'summary' })
     return steps
   }
   c.sections.forEach((s, i) => {
     steps.push({ kind: 'notes', section: i })
     if (s.cards?.length) steps.push({ kind: 'cards', section: i })
-    s.questions.forEach((q, j) => steps.push({ kind: 'q', section: i, index: j, q }))
+    shuffleMcqs(s.questions).forEach((q, j) => steps.push({ kind: 'q', section: i, index: j, q }))
     // Never two recall cards in a row: there's always a section between them.
     if (i < c.sections.length - 1 && Math.random() < RECALL_CHANCE) steps.push({ kind: 'recall', after: i })
   })
@@ -70,18 +79,22 @@ function buildSteps(t: Topic, test: boolean): Step[] {
 
 const credit = (m: Mark | null) => (!m ? 0 : m.verdict === 'correct' ? 1 : m.verdict === 'partial' ? 0.5 : 0)
 
-/** Put a missed question back in a few steps on, always before the summary. */
+/** Put a missed question back in a few steps on (answers in new places), always before the summary. */
 function withRetry(steps: Step[], at: number): Step[] {
   const s = steps[at]
   if (!s || s.kind !== 'q') return steps
   const summary = steps.findIndex((x) => x.kind === 'summary')
-  return insertRetry(steps, at, { ...s, retry: (s.retry ?? 0) + 1 }, summary === -1 ? steps.length : summary).list
+  return insertRetry(steps, at, { ...s, q: reshuffleQuestion(s.q), retry: (s.retry ?? 0) + 1 }, summary === -1 ? steps.length : summary).list
 }
 
-/** Where you are in a set of key-term cards: the pile still to go, and how often each came back. */
+/** Where you are in a set of key-term cards: the pile still to go, how often each came back, and its greens. */
 interface CardsState {
   queue: number[]
   tries: Record<number, number>
+  /** Times you've said "Knew it" (green). Two greens and the card is done. */
+  greens?: Record<number, number>
+  /** Cards already rated for spaced repetition in this pile (only your first rating counts). */
+  rated?: Record<number, true>
 }
 
 /**
@@ -96,6 +109,8 @@ interface TopicSession {
   at: number
   slots: Record<number, Slot>
   cards: Record<number, CardsState>
+  /** Changes each time the topic starts over, so shuffled questions shuffle differently. */
+  run: string
 }
 const sessions = new Map<string, TopicSession>()
 
@@ -114,6 +129,7 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
   const sessionKey = `${id}:${test ? 'test' : 'learn'}`
   const cards = useRef<Record<number, CardsState>>({})
   const contentKey = useRef('')
+  const run = useRef(Math.random().toString(36).slice(2, 8))
 
   useEffect(() => {
     let alive = true
@@ -132,6 +148,7 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
         if (kept && section === undefined && kept.content === contentKey.current && !reset) {
           progress.current = { ...p }
           cards.current = kept.cards
+          run.current = kept.run
           setTopic(t)
           setSteps(kept.steps)
           setAt(kept.at)
@@ -143,6 +160,7 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
         }
         sessions.delete(sessionKey)
         cards.current = {}
+        run.current = Math.random().toString(36).slice(2, 8)
         const s = buildSteps(t, test)
         // Open at the section picked on the week page, or resume where you left off; a
         // finished topic starts over. A test always starts at the beginning.
@@ -178,7 +196,7 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
       rememberCoursesPlace({ name: 'week', courseId: topic.course_id, weekId: topic.week_id })
       return
     }
-    sessions.set(sessionKey, { content: contentKey.current, steps, at, slots, cards: cards.current })
+    sessions.set(sessionKey, { content: contentKey.current, steps, at, slots, cards: cards.current, run: run.current })
   }, [topic, steps, at, slots, sessionKey])
 
   const step = steps[at]
@@ -244,11 +262,19 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
     }
   }
 
+  const counts = () => !(step?.kind === 'q' && step.retry) && !test
   const override = () => {
     if (!slot.mark || slot.mark.verdict === 'correct' || !progress.current) return
     const before = credit(slot.mark)
-    patch(at, { mark: { ...slot.mark, score: 10, verdict: 'correct' }, overridden: true })
-    if (!(step?.kind === 'q' && step.retry)) save({ correct: progress.current.correct + 1 - before })
+    patch(at, { mark: { ...slot.mark, score: 10, verdict: 'correct' }, overridden: true, before: slot.mark })
+    if (counts()) save({ correct: progress.current.correct + 1 - before })
+  }
+  /** Take back "I was right": the original mark comes back (and it'll come round again if it was wrong). */
+  const undoOverride = () => {
+    if (!slot.overridden || !slot.before || !progress.current) return
+    const was = slot.before
+    patch(at, { mark: was, overridden: false, before: null })
+    if (counts()) save({ correct: progress.current.correct - 1 + credit(was) })
   }
 
   const explain = () => {
@@ -266,10 +292,10 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
   const askAbout = (sec: TopicSection) =>
     openExplain({ ctx: { selection: `${sec.heading}\n\n${sec.notes}` }, title: sec.heading, mode: 'explain' })
 
-  const rewrite = async (instructions: string) => {
+  const rewrite = async (instructions: string, level: NoteLevel) => {
     if (!topic) return
     try {
-      await api.courses.write({ topicIds: [topic.id], instructions })
+      await api.courses.write({ topicIds: [topic.id], instructions, levels: [level] })
       setRewriteOpen(false)
       toast('Rewriting this topic. It’ll be ready on the week page.', 'good')
       go({ name: 'week', courseId: topic.course_id, weekId: topic.week_id })
@@ -300,7 +326,8 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
         else window.dispatchEvent(new Event(SUBMIT_EVENT))
       } else if (!slot.mark && step.q.type === 'true_false' && (e.key === 't' || e.key === 'f')) void submit({ type: 'true_false', value: e.key === 't' })
       else if (!slot.mark && e.key === 'h') patch(at, { hint: true })
-      else if (slot.mark && e.key === 'r') override()
+      else if (slot.mark && e.key === 'r') slot.overridden ? undoOverride() : override()
+      else if (slot.overridden && e.key === 'u') undoOverride()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -348,7 +375,10 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
         </Button>
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex items-center justify-between gap-2 text-[0.85rem] text-muted">
-            <span className="truncate font-semibold">{content.title}</span>
+            <span className="truncate font-semibold">
+              {content.title}
+              {(topic.levels.length > 1 || topic.level !== 'standard') && <span className="font-normal"> · {NOTE_LEVEL_INFO[topic.level].label}</span>}
+            </span>
             <span className="shrink-0 tabular">
               {test
                 ? step.kind === 'summary'
@@ -396,7 +426,7 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
             saved={cards.current[at]}
             onSave={(st) => {
               cards.current = { ...cards.current, [at]: st }
-              sessions.set(sessionKey, { content: contentKey.current, steps, at, slots, cards: cards.current })
+              sessions.set(sessionKey, { content: contentKey.current, steps, at, slots, cards: cards.current, run: run.current })
             }}
             onNext={next}
             onBack={back}
@@ -443,7 +473,7 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
               </div>
             )}
             <div className={cx('rounded-xl border bg-surface p-[clamp(18px,3.4vw,36px)] transition-colors duration-500', verdict === 'correct' ? 'border-good/50' : verdict === 'partial' ? 'border-warn/50' : verdict === 'wrong' ? 'border-bad/50' : 'border-line')}>
-              <CourseQuestionView q={step.q} qid={`${topic.id}:${at}`} mark={slot.mark} answer={slot.answer} onAnswer={submit} disabled={!!slot.mark || slot.marking} />
+              <CourseQuestionView q={step.q} qid={`${topic.id}:${run.current}:${at}`} mark={slot.mark} answer={slot.answer} onAnswer={submit} disabled={!!slot.mark || slot.marking} />
               {slot.marking && (
                 <div className="mt-4 flex items-center gap-2 text-muted">
                   Marking <Dots />
@@ -459,6 +489,11 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
                   {verdict !== 'correct' && (
                     <Button size="sm" variant="outline" onClick={override} title="I was right (R)">
                       I was right
+                    </Button>
+                  )}
+                  {slot.overridden && (
+                    <Button size="sm" variant="outline" onClick={undoOverride} title="Undo: put back the original mark (U)">
+                      <Undo2 className="size-4" /> Undo
                     </Button>
                   )}
                   <Button size="sm" variant="ink" onClick={next}>
@@ -524,6 +559,8 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
 
       {rewriteOpen && (
         <RewriteDialog
+          level={topic.level}
+          levels={topic.levels}
           section={step.kind === 'notes' || (step.kind === 'q' && step.section >= 0) ? content.sections[step.section]?.heading ?? null : null}
           onClose={() => setRewriteOpen(false)}
           onRewrite={rewrite}
@@ -533,15 +570,22 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
   )
 }
 
-/** Write the topic again, optionally saying what to change. Replaces its notes, questions and recall cards, and resets progress. */
-function RewriteDialog({ section, onClose, onRewrite }: { section: string | null; onClose: () => void; onRewrite: (instructions: string) => Promise<void> }) {
+/**
+ * Write the topic again, at the level it's shown at or another one, optionally
+ * saying what to change. Another level is added alongside (both are kept); the
+ * same level replaces its notes and questions and resets progress on it.
+ */
+function RewriteDialog({ level, levels, section, onClose, onRewrite }: { level: NoteLevel; levels: NoteLevel[]; section: string | null; onClose: () => void; onRewrite: (instructions: string, level: NoteLevel) => Promise<void> }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [pick, setPick] = useState<NoteLevel>(level)
   const go = async () => {
     setBusy(true)
-    await onRewrite(text.trim() ? `What I want changed in this rewrite: ${text.trim()}` : '')
+    await onRewrite(text.trim() ? `What I want changed in this rewrite: ${text.trim()}` : '', pick)
     setBusy(false)
   }
+  const replaces = levels.includes(pick)
+  const keepsCards = levels.some((l) => l !== pick)
   return (
     <Modal
       open
@@ -552,13 +596,34 @@ function RewriteDialog({ section, onClose, onRewrite }: { section: string | null
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="danger" loading={busy} onClick={go}>
-            Rewrite
+          <Button variant={replaces ? 'danger' : 'primary'} loading={busy} onClick={go}>
+            {replaces ? 'Rewrite' : `Write ${NOTE_LEVEL_INFO[pick].label.toLowerCase()}`}
           </Button>
         </>
       }
     >
-      <p className="mb-3 text-muted">You get new notes and questions, its recall cards are replaced, and your progress on this topic starts again. This costs about the same as writing it the first time.</p>
+      <div className="mb-3 text-[0.84rem] font-medium text-ink/80">Level of detail</div>
+      <div className="mb-3 grid gap-2 sm:grid-cols-3">
+        {NOTE_LEVELS.map((l) => (
+          <button
+            key={l}
+            type="button"
+            onClick={() => setPick(l)}
+            aria-pressed={pick === l}
+            className={cx('rounded-xl border px-3 py-2.5 text-left transition-colors', pick === l ? 'border-accent bg-accent-soft/50' : 'border-line hover:border-[color-mix(in_oklab,var(--ink)_22%,transparent)]')}
+          >
+            <div className="font-semibold">{NOTE_LEVEL_INFO[l].label}</div>
+            <div className="text-[0.78rem] text-muted">{levels.includes(l) ? (l === level ? 'Showing now' : 'Written') : 'Not written yet'}</div>
+          </button>
+        ))}
+      </div>
+      <p className="mb-3 text-[0.92rem] text-muted">{NOTE_LEVEL_INFO[pick].about}</p>
+      <p className="mb-3 text-muted">
+        {replaces
+          ? `You get new ${NOTE_LEVEL_INFO[pick].label.toLowerCase()} notes and questions, and your progress on them starts again. ${keepsCards ? 'Your other levels and the recall cards stay.' : 'Its recall cards are replaced.'}`
+          : `This is added alongside the ${levels.map((l) => NOTE_LEVEL_INFO[l].label.toLowerCase()).join(' and ')} notes, which stay. Switch between them on the week page.`}{' '}
+        It costs about the same as writing the topic the first time.
+      </p>
       <Textarea
         rows={3}
         autoFocus
@@ -618,23 +683,20 @@ function NotesStep({ section, first, goal, onNext, onAsk }: { section: TopicSect
   )
 }
 
-type CardRating = 1 | 2 | 3
+type CardRating = PileRating
 const CARD_RATINGS: { r: CardRating; label: string; tone: string }[] = [
   { r: 1, label: 'Didn’t know', tone: 'border-bad/40 bg-bad-soft text-bad' },
   { r: 2, label: 'Sort of', tone: 'border-warn/40 bg-warn-soft text-warn' },
   { r: 3, label: 'Knew it', tone: 'border-good/40 bg-good-soft text-good' }
 ]
-/** A card you don't know comes back at most this many times in one go; spaced repetition takes it from there. */
-const MAX_CARD_TRIES = 4
-
 /**
  * The section's key terms before its questions. Think of the answer, flip, and
- * rate yourself; ratings feed spaced repetition. "Didn't know" or "Sort of"
- * sends the card to the back of the pile until you know it, and lets you choose
- * how to go over it: move on, re-read the section's notes (no AI), or have
- * Claude explain it in depth (one AI call, only when you ask). Keys: Space
- * turns the card over and back (as often as you like), ↩ shows the answer then
- * continues, 1–3 rate, N notes, E explain with AI.
+ * rate yourself. A card is done after two "Knew it"s (see nextPile). Your first
+ * rating of each card feeds spaced repetition. After "Didn't know" or "Sort of"
+ * you can choose how to go over it: move on, re-read the section's notes (no
+ * AI), or have Claude explain it in depth (one AI call, only when you ask).
+ * Keys: Space turns the card over and back (as often as you like), ↩ shows the
+ * answer then continues, 1–3 rate, N notes, E explain with AI.
  */
 function CardsStep({
   cards,
@@ -654,10 +716,12 @@ function CardsStep({
   onNext: () => void
   onBack: () => void
 }) {
-  // Card indexes still to go; ones you don't know yet go back on the end.
+  // Card indexes still to go, in order.
   const [queue, setQueue] = useState(() => (saved?.queue.length ? saved.queue.filter((i) => i < cards.length) : cards.map((_, i) => i)))
   const [tries, setTries] = useState<Record<number, number>>(() => saved?.tries ?? {})
-  useEffect(() => onSave({ queue, tries }), [queue, tries])
+  const [greens, setGreens] = useState<Record<number, number>>(() => saved?.greens ?? {})
+  const [srDone, setSrDone] = useState<Record<number, true>>(() => saved?.rated ?? {})
+  useEffect(() => onSave({ queue, tries, greens, rated: srDone }), [queue, tries, greens, srDone])
   const [flipped, setFlipped] = useState(false)
   // Seen the answer at least once: you can then rate it, and turn the card over as often as you like.
   const [revealed, setRevealed] = useState(false)
@@ -682,11 +746,11 @@ function CardsStep({
 
   const advance = (r: CardRating) => {
     const n = (tries[idx] ?? 0) + 1
-    const rest = queue.slice(1)
-    const next = r !== 3 && n < MAX_CARD_TRIES ? [...rest, idx] : rest
-    if (!next.length) return onNext()
+    const pile = nextPile(queue, greens, r)
+    setGreens(pile.greens)
+    if (!pile.queue.length) return onNext()
     setTries({ ...tries, [idx]: n })
-    setQueue(next)
+    setQueue(pile.queue)
     setFlipped(false)
     setRevealed(false)
     setRated(null)
@@ -717,7 +781,11 @@ function CardsStep({
 
   const rate = (r: CardRating) => {
     if (!revealed || rated) return
-    void api.courses.rateCard({ topicId, front: card.front, cardId: card.id, rating: r }).catch(() => {})
+    // Only your first go at each card counts for spaced repetition; the rest is practice.
+    if (!srDone[idx]) {
+      setSrDone({ ...srDone, [idx]: true })
+      void api.courses.rateCard({ topicId, front: card.front, cardId: card.id, rating: r }).catch(() => {})
+    }
     if (r === 3) return advance(r)
     setRated(r)
   }
@@ -743,14 +811,17 @@ function CardsStep({
     return () => window.removeEventListener('keydown', onKey)
   })
   if (!card) return null
-  const comesBack = (tries[idx] ?? 0) + 1 < MAX_CARD_TRIES
 
   const backButton = (
     <Button variant="ghost" size="lg" onClick={goBack} disabled={explaining}>
       <ArrowLeft className="size-4" /> Back to the card <Kbd className="ml-1">B</Kbd>
     </Button>
   )
-  const comesBackNote = <span className="text-[0.85rem] text-muted">{comesBack ? 'This card comes back at the end until you know it.' : 'Spaced review will bring this one back soon.'}</span>
+  const comesBackNote = (
+    <span className="text-[0.85rem] text-muted">
+      {rated === 1 ? `This card comes back in ${RED_GAP} cards.` : 'This card goes to the back of the pile.'} Press Knew it twice to finish it.
+    </span>
+  )
   const nextButton = (label: string) => (
     <Button variant="primary" size="lg" onClick={() => rated && advance(rated)} disabled={explaining}>
       {label} <ArrowRight className="size-4" /> <Kbd className="ml-1 border-current/30">↩</Kbd>
@@ -827,7 +898,12 @@ function CardsStep({
           </Pill>
         )}
         <span>
-          {done} of {cards.length} known
+          {done} of {cards.length} done
+        </span>
+        <span className="ml-auto flex items-center gap-1" title={`Knew it ${greens[idx] ?? 0} of ${GREENS_TO_PASS} times`}>
+          {Array.from({ length: GREENS_TO_PASS }, (_, i) => (
+            <span key={i} className={cx('size-2.5 rounded-full border', i < (greens[idx] ?? 0) ? 'border-good bg-good' : 'border-line')} />
+          ))}
         </span>
       </div>
       {/* A div, not a button: a focused button would also react to the keys the step handles. */}
@@ -866,7 +942,9 @@ function CardsStep({
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          <span className="text-[0.85rem] text-muted">How well did you know it?</span>
+          <span className="text-[0.85rem] text-muted">
+            How well did you know it? {(greens[idx] ?? 0) > 0 ? 'One more Knew it and this card is done.' : 'A card is done once you’ve pressed Knew it twice.'}
+          </span>
           <div className="grid grid-cols-3 gap-2 max-sm:grid-cols-1">
             {CARD_RATINGS.map(({ r, label, tone }) => (
               <button key={r} onClick={() => rate(r)} className={cx('flex items-center justify-center gap-2 rounded-xl border px-4 py-3 font-semibold transition-transform active:scale-[0.98]', tone)}>

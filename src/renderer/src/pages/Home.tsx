@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { keyLabel } from '@shared/keymap'
-import type { Deck, Card } from '@shared/types'
+import type { Deck, Card, HomeStats } from '@shared/types'
 import { useStore } from '../lib/store'
 import { api } from '../lib/api'
 import { runCommand, useCommands } from '../lib/commands'
+import { STUDY_TIME_EVENT, fmtDuration } from '../lib/studyTime'
 import { Shell } from '../components/Shell'
-import { Markdown } from '../components/Markdown'
 import { Button, Kbd, cx } from '../components/ui'
 
 type DeckRow = Deck & { card_count: number; due_count: number }
@@ -28,22 +28,28 @@ export function Home() {
   const [decks, setDecks] = useState<DeckRow[]>([])
   const [notes, setNotes] = useState<{ id: string; title: string; module: string; updated_at: string }[]>([])
   const [ov, setOv] = useState<Overview | null>(null)
-  const [flipped, setFlipped] = useState(false)
+  const [stats, setStats] = useState<HomeStats | null>(null)
 
   useEffect(() => {
     void api.decks.list().then(setDecks)
     void api.notes.list().then(setNotes)
     void api.decks.overview().then((o) => setOv(o as Overview))
+    void api.stats.home().then(setStats)
   }, [version])
+  // Time saved from a study page (or another device syncing) shows up straight away.
+  useEffect(() => {
+    const refresh = () => void api.stats.home().then(setStats)
+    window.addEventListener(STUDY_TIME_EVENT, refresh)
+    return () => window.removeEventListener(STUDY_TIME_EVENT, refresh)
+  }, [])
 
   const due = decks.reduce((n, d) => n + d.due_count, 0)
   const running = jobs.filter((j) => j.status === 'running')
   const sorted = [...decks].sort((a, b) => b.due_count - a.due_count || a.name.localeCompare(b.name))
   const top = sorted.find((d) => d.due_count > 0)
-  const next = ov?.next ?? null
 
   const startReview = () => (top ? go({ name: 'flashcards', deckId: top.id, mode: 'due' }) : runCommand('study.learn'))
-  useCommands({ 'study.flip': next ? () => setFlipped((f) => !f) : null, 'learn.submit': top ? startReview : null }, [next, top])
+  useCommands({ 'learn.submit': top ? startReview : null }, [top])
 
   return (
     <Shell className="max-w-[1000px]">
@@ -93,33 +99,8 @@ export function Home() {
           </div>
         </div>
 
-        {/* Next-up card stack */}
-        {/* The back cards are offset and tilted, so leave them room on the right. */}
-        <div className="relative mx-auto h-[250px] w-[calc(100%-2rem)] max-w-[380px] select-none">
-          <div className="absolute inset-0 translate-x-4 translate-y-3 rotate-[5deg] rounded-2xl border border-line bg-surface shadow-sm" />
-          <div className="absolute inset-0 translate-x-2 translate-y-1.5 rotate-[2.5deg] rounded-2xl border border-line bg-surface shadow-sm" />
-          {next ? (
-            <button onClick={() => setFlipped((f) => !f)} className={cx('flip group absolute inset-0 text-left', flipped && 'is-flipped')} title="Flip (Space)">
-              <div className="flip-inner h-full transition-transform duration-700 ease-out-soft group-hover:-rotate-1">
-                <div className="flip-face flex flex-col rounded-2xl border border-line bg-surface p-6 shadow-[0_18px_40px_-24px_rgba(20,40,120,0.35)]">
-                  <div className="flex items-center gap-2 text-[0.8rem] text-muted">
-                    <span className="size-2 rounded-full" style={{ background: `hsl(${deckHue(next.deck_name)} 70% 55%)` }} />
-                    Next up · {next.deck_name}
-                  </div>
-                  <Markdown className="mt-4 line-clamp-5 text-[1.15rem] leading-snug font-medium">{next.front}</Markdown>
-                </div>
-                <div className="flip-face flip-back flex flex-col rounded-2xl border border-accent/40 bg-accent-soft p-6">
-                  <div className="text-[0.8rem] text-accent">Answer</div>
-                  <Markdown className="mt-4 line-clamp-6 text-[1.05rem] leading-snug">{next.back}</Markdown>
-                </div>
-              </div>
-            </button>
-          ) : (
-            <div className="absolute inset-0 flex flex-col justify-center rounded-2xl border border-line bg-surface p-6 shadow-[0_18px_40px_-24px_rgba(20,40,120,0.35)]">
-              <div className="text-[1.15rem] font-medium">{decks.length ? 'Nothing waiting.' : 'No cards yet.'}</div>
-            </div>
-          )}
-        </div>
+        {/* Time studied this week, and how it's going. */}
+        <StudyPanel stats={stats} />
       </section>
 
       {running.length > 0 && (
@@ -131,6 +112,8 @@ export function Home() {
           {running.length > 1 && <span className="text-muted">+{running.length - 1} more</span>}
         </button>
       )}
+
+      {stats && <StatTiles stats={stats} />}
 
       {ov && <Heatmap ov={ov} />}
 
@@ -164,6 +147,81 @@ export function Home() {
       </div>
 
     </Shell>
+  )
+}
+
+const shortDay = (iso: string) => new Date(`${iso}T12:00`).toLocaleDateString(undefined, { weekday: 'short' })
+const longDay = (iso: string) => new Date(`${iso}T12:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
+const pct = (x: number | null) => (x == null ? '—' : `${Math.round(x * 100)}%`)
+
+/** Today's time studied as the headline, with the last 7 days as bars. */
+function StudyPanel({ stats }: { stats: HomeStats | null }) {
+  if (!stats)
+    return <div className="skeleton mx-auto h-[250px] w-full max-w-[380px] rounded-2xl" />
+  const max = Math.max(...stats.days.map((d) => d.seconds), 15 * 60)
+  return (
+    <div className="mx-auto flex h-[250px] w-full max-w-[380px] flex-col rounded-2xl border border-line bg-surface p-6 shadow-[0_18px_40px_-24px_rgba(20,40,120,0.35)]">
+      <div className="text-[0.8rem] text-muted">Time studied today</div>
+      <div className="mt-1 flex items-baseline gap-3">
+        <span key={stats.time.today} className="pop-in text-[2.6rem] leading-none font-semibold tracking-tight tabular">
+          {fmtDuration(stats.time.today)}
+        </span>
+        <span className="text-[0.9rem] text-muted">{fmtDuration(stats.time.week)} this week</span>
+      </div>
+      <div className="relative mt-auto flex h-[110px] items-end gap-[2px]" role="img" aria-label="Time studied each day for the last 7 days">
+        {stats.days.map((d) => {
+          const h = d.seconds ? Math.max(4, Math.round((d.seconds / max) * 96)) : 0
+          const isToday = d.date === stats.days[stats.days.length - 1].date
+          return (
+            // The whole column is the hover target, not just the bar.
+            <div key={d.date} className="group relative flex h-full flex-1 flex-col items-center justify-end gap-1.5">
+              <div className="pointer-events-none absolute -top-1 left-1/2 z-10 hidden -translate-x-1/2 -translate-y-full rounded-md bg-ink px-2 py-1 text-[0.75rem] whitespace-nowrap text-bg shadow-lg group-hover:block">
+                {longDay(d.date)} · {fmtDuration(d.seconds)}
+              </div>
+              <div
+                className={cx('w-full max-w-[34px] rounded-t-[4px] transition-[height] duration-500 ease-out-soft', d.seconds ? (isToday ? 'bg-accent' : 'bg-[color-mix(in_oklab,var(--accent)_55%,var(--surface))]') : '')}
+                style={{ height: h }}
+              />
+              <div className="h-px w-full bg-line" />
+              <span className={cx('text-[0.72rem]', isToday ? 'font-semibold text-ink' : 'text-muted')}>{shortDay(d.date)}</span>
+            </div>
+          )
+        })}
+      </div>
+      <ul className="sr-only">
+        {stats.days.map((d) => (
+          <li key={d.date}>
+            {longDay(d.date)}: {fmtDuration(d.seconds)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/** The numbers: time, streak, topics, questions and cards. */
+function StatTiles({ stats }: { stats: HomeStats }) {
+  const t = stats.topics
+  const tiles: { label: string; value: string; sub?: string }[] = [
+    { label: 'Total time studied', value: fmtDuration(stats.time.total), sub: stats.time.dailyAverage ? `${fmtDuration(stats.time.dailyAverage)} a day on average` : 'Counted while you study' },
+    { label: 'Last 30 days', value: fmtDuration(stats.time.month), sub: stats.bestDay ? `Best day ${fmtDuration(stats.bestDay.seconds)}` : undefined },
+    { label: 'Study streak', value: plural(stats.streak, 'day'), sub: 'Days in a row with studying or reviews' },
+    { label: 'Topics done', value: t.total ? `${t.done} / ${t.total}` : '—', sub: stats.courses ? `${plural(t.written, 'topic')} written in ${plural(stats.courses, 'course')}` : 'No courses yet' },
+    { label: 'Topic questions', value: t.answered.toLocaleString(), sub: t.answered ? `${pct(t.correct / t.answered)} right first time` : 'Answered while learning topics' },
+    { label: 'Topic tests', value: t.tests ? pct(t.testAverage) : '—', sub: t.tests ? `Average over ${plural(t.tests, 'test')}` : 'None taken yet' },
+    { label: 'Cards reviewed', value: stats.cards.reviewedToday.toLocaleString(), sub: `today · ${stats.cards.reviewedWeek.toLocaleString()} this week · ${stats.cards.total.toLocaleString()} in all` },
+    { label: 'Retention', value: pct(stats.cards.retention), sub: stats.cards.known ? `${plural(stats.cards.known, 'card')} well known (3+ weeks)` : 'Reviews not rated Again, last 30 days' }
+  ]
+  return (
+    <section className="mb-12 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
+      {tiles.map((x) => (
+        <div key={x.label} className="min-w-0 border-t border-line pt-3">
+          <div className="text-[0.8rem] text-muted">{x.label}</div>
+          <div className="tabular text-[1.5rem] leading-tight font-semibold tracking-tight">{x.value}</div>
+          {x.sub && <div className="truncate text-[0.8rem] text-muted" title={x.sub}>{x.sub}</div>}
+        </div>
+      ))}
+    </section>
   )
 }
 

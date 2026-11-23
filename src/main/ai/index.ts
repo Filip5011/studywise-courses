@@ -11,7 +11,7 @@ import { runClaude, CliError, emitRateLimit, type CliResult, type AiLiveEvent } 
 import { runOllama } from './ollama'
 import { Semaphore } from './queue'
 import { mockResponse, mockStream, mockLive } from './mock'
-import { logAiCall, getDeck, getSetting } from '../db/repo'
+import { logAiCall, getDeck, getSetting, courseNoteForDeck } from '../db/repo'
 
 export { CliError }
 export type { AiLiveEvent }
@@ -102,6 +102,8 @@ The source file${opts.files.length > 1 ? 's' : ''} (${names}) ${opts.files.lengt
     prompt += `\n\nThe source file${opts.files.length > 1 ? 's are' : ' is'} in your current working directory: ${names}. Read ${opts.files.length > 1 ? 'them' : 'it'} with the Read tool first. Look at every page, including images, screenshots, tables and diagrams, not just the text.`
   }
   if (vars.part_info && !/\{\{\s*part_info\s*\}\}/.test(tpl)) prompt += `\n\n${String(vars.part_info)}`
+  // Instructions typed for this run (planning, level of detail, rewrites) mustn't vanish from an edited prompt.
+  if (vars.instructions && !/\{\{\s*instructions\s*\}\}/.test(tpl)) prompt += `\n\n${String(vars.instructions)}`
   if (opts.deckId) {
     try {
       const extra = getDeck(opts.deckId).extra_instructions.trim()
@@ -109,6 +111,9 @@ The source file${opts.files.length > 1 ? 's' : ''} (${names}) ${opts.files.lengt
     } catch {
       /* ignore */
     }
+    // Every call for a course (planning, topics, marking, trimming, explaining its cards) carries its note.
+    const note = courseNoteForDeck(opts.deckId)
+    if (note) prompt += `\n\nMy note about this course (always keep it in mind and tailor everything to it):\n${note}`
   }
   // The JSON format is the same on every call, so it goes with the fixed
   // instructions in the system prompt, which Claude caches across calls.

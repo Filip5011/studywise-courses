@@ -317,3 +317,17 @@ export interface SyncStatus {
   devices: SyncDevice[]
   error: string | null
 }
+
+/** What the home page shows about your studying (see repo.homeStats). */
+export interface HomeStats {
+  /** Seconds studied, across every synced device. */
+  time: { today: number; week: number; month: number; total: number; dailyAverage: number }
+  /** Seconds per day for the last 7 days, oldest first. */
+  days: { date: string; seconds: number }[]
+  /** Days in a row with any studying or reviews, counting back from today (or yesterday). */
+  streak: number
+  bestDay: { date: string; seconds: number } | null
+  cards: { reviewedToday: number; reviewedWeek: number; total: number; known: number; retention: number | null }
+  topics: { done: number; total: number; written: number; answered: number; correct: number; tests: number; testAverage: number | null }
+  courses: number
+}

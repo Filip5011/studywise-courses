@@ -19,7 +19,10 @@ import {
   effectiveDue,
   emptyProgress,
   examPhase,
+  isNoteLevel,
   mergeOutlines,
+  NOTE_LEVELS,
+  NOTE_LEVEL_INFO,
   pageList,
   sanitizeQuestions,
   shuffleMcqs,
@@ -34,9 +37,11 @@ import {
   type CourseSummary,
   type Figure,
   type OutlineTopic,
+  type NoteLevel,
   type Topic,
   type TopicContent,
   type TopicProgress,
+  type TopicVersion,
   type Week,
   type WeekFull
 } from '@shared/course'
@@ -56,7 +61,34 @@ const WHOLE_PDF_PAGES = 40
 
 type CourseRow = Course & { note_folder_id?: string | null }
 type WeekRow = Omit<Week, 'recall_off'> & { outline: string | null; recall_off: number }
-type TopicRow = { id: string; course_id: string; week_id: string; key: string; position: number; plan: string; status: string; error: string | null; content: string | null; progress: string; updated_at: string; note_id: string | null }
+type TopicRow = {
+  id: string
+  course_id: string
+  week_id: string
+  key: string
+  position: number
+  plan: string
+  status: string
+  error: string | null
+  content: string | null
+  progress: string
+  updated_at: string
+  note_id: string | null
+  level: string | null
+  versions: string | null
+}
+type Versions = Partial<Record<NoteLevel, TopicVersion>>
+
+const rowLevel = (r: TopicRow): NoteLevel => (isNoteLevel(r.level) ? r.level : 'standard')
+const rowVersions = (r: TopicRow): Versions => {
+  const v = json<Versions>(r.versions, {})
+  return Object.fromEntries(Object.entries(v).filter(([k, x]) => isNoteLevel(k) && x?.content)) as Versions
+}
+/** Every level written for a topic: the one shown, and the ones put aside. */
+const writtenLevels = (r: TopicRow): NoteLevel[] => {
+  const v = rowVersions(r)
+  return NOTE_LEVELS.filter((l) => (r.content && rowLevel(r) === l) || !!v[l])
+}
 
 function cardCounts(courseId: string): Map<string, number> {
   const m = new Map<string, number>()
@@ -82,6 +114,8 @@ const toTopic = (r: TopicRow, counts: Map<string, number>): Topic => ({
   progress: { ...emptyProgress(), ...json<Partial<TopicProgress>>(r.progress, {}) },
   card_count: counts.get(r.id) ?? 0,
   note_id: r.note_id ?? null,
+  level: rowLevel(r),
+  levels: writtenLevels(r),
   updated_at: r.updated_at
 })
 
@@ -175,7 +209,13 @@ function setWeek(id: string, patch: { status?: string; error?: string | null; ou
   if (sets.length) getDb().prepare(`UPDATE weeks SET ${sets.join(', ')} WHERE id = @id`).run({ ...patch, id })
 }
 
-function setTopic(id: string, patch: { status?: string; error?: string | null; content?: string | null; progress?: string }): void {
+function topicRow(id: string): TopicRow {
+  const r = getDb().prepare('SELECT * FROM topics WHERE id = ?').get(id) as TopicRow | undefined
+  if (!r) throw new Error('Topic not found')
+  return r
+}
+
+function setTopic(id: string, patch: { status?: string; error?: string | null; content?: string | null; progress?: string; level?: NoteLevel; versions?: string }): void {
   const sets = Object.keys(patch).map((k) => `${k} = @${k}`)
   getDb().prepare(`UPDATE topics SET ${[...sets, 'updated_at = @updated_at'].join(', ')} WHERE id = @id`).run({ ...patch, updated_at: now(), id })
 }
@@ -183,7 +223,8 @@ function setTopic(id: string, patch: { status?: string; error?: string | null; c
 /** After a crash or quit, nothing is still being written. */
 export function recoverInterrupted(): void {
   const d = getDb()
-  d.prepare("UPDATE topics SET status = 'error', error = 'Interrupted. Write it again.' WHERE status = 'writing'").run()
+  // A topic that already had notes keeps them; the write that was cut short is just reported.
+  d.prepare("UPDATE topics SET status = CASE WHEN content IS NULL THEN 'error' ELSE 'ready' END, error = 'Interrupted. Write it again.' WHERE status = 'writing'").run()
   d.prepare("UPDATE weeks SET status = 'error', error = 'Planning was interrupted. Plan it again.' WHERE status = 'planning'").run()
 }
 
@@ -240,6 +281,21 @@ export function setExamDate(courseId: string, date: string | null): Course {
   getDb().prepare('UPDATE courses SET exam_date = ? WHERE id = ?').run(date, courseId)
   touchCourse(courseId)
   return courseRow(courseId)
+}
+
+/** Your note to the AI about the course. It goes into every prompt for the course (see renderPrompt). */
+export function setCourseNote(courseId: string, note: string): Course {
+  courseRow(courseId)
+  getDb().prepare('UPDATE courses SET note = ? WHERE id = ?').run(note.trim(), courseId)
+  touchCourse(courseId)
+  return courseRow(courseId)
+}
+
+/** Instructions you typed for one run, worded so the model puts them ahead of its standing rules. */
+export function priorityInstructions(text: string): string {
+  const t = text.trim()
+  return t ? `My own instructions for this. They take priority over your other rules and anything above whenever they disagree:
+${t}` : ''
 }
 
 /**
@@ -518,7 +574,7 @@ export async function planWeek(weekId: string, ctx: JobContext, instructions = '
     const texts: { file: CourseFile; text: string | null }[] = []
     for (const f of files) texts.push({ file: f, text: await fileText(f).catch(() => null) })
     const describe = (list: typeof texts) => list.map(({ file }) => `${file.name}${file.pages ? ` (${file.pages} pages)` : ''}`).join(', ')
-    const baseVars = { module: course.module || course.name, level: course.level, instructions }
+    const baseVars = { module: course.module || course.name, level: course.level, instructions: priorityInstructions(instructions) }
     const total = texts.reduce((n, t) => n + (t.text?.length ?? 0), 0)
 
     // What earlier weeks already teach, so this week doesn't repeat it.
@@ -728,16 +784,14 @@ export function fixTopicCardCounts(): number {
       if (topicId) byTopic.set(topicId, [...(byTopic.get(topicId) ?? []), r.id])
     }
     for (const [topicId, ids] of byTopic) {
-      const row = d.prepare('SELECT content FROM topics WHERE id = ?').get(topicId) as { content: string | null } | undefined
-      if (!row?.content) continue
-      const content = json<TopicContent | null>(row.content, null)
-      if (!content) continue
       const fixes = ids.map((id) => ({ id, ...changed.get(id)! }))
-      for (const s of content.sections) for (const c of s.cards ?? []) {
-        const f = fixes.find((x) => x.id === c.id) ?? (!c.id ? fixes.find((x) => x.from.trim() === c.front.trim()) : undefined)
-        if (f) c.front = f.to
-      }
-      d.prepare('UPDATE topics SET content = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(content), now(), topicId)
+      editAllLevels(topicId, (content) => {
+        for (const s of content.sections)
+          for (const c of s.cards ?? []) {
+            const f = fixes.find((x) => x.id === c.id) ?? (!c.id ? fixes.find((x) => x.from.trim() === c.front.trim()) : undefined)
+            if (f) c.front = f.to
+          }
+      })
     }
   })()
   return changed.size
@@ -809,13 +863,10 @@ export function removeTopicCards(cardIds: string[]): number {
   }
   d.transaction(() => {
     repo.deleteCards(cardIds)
-    for (const topicId of topics) {
-      const row = d.prepare('SELECT content FROM topics WHERE id = ?').get(topicId) as { content: string | null } | undefined
-      const content = row?.content ? json<TopicContent | null>(row.content, null) : null
-      if (!content) continue
-      for (const s of content.sections) if (s.cards) s.cards = s.cards.filter((c) => !c.id || !ids.has(c.id))
-      d.prepare('UPDATE topics SET content = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(content), now(), topicId)
-    }
+    for (const topicId of topics)
+      editAllLevels(topicId, (content) => {
+        for (const s of content.sections) if (s.cards) s.cards = s.cards.filter((c) => !c.id || !ids.has(c.id))
+      })
   })()
   return cardIds.length
 }
@@ -835,20 +886,74 @@ export function sectionCards(cards: AiTopic['cards'], section: number): { front:
   return cards.filter((c) => c.section === section && c.front.trim() && c.back.trim()).map((c) => ({ front: withPointCount(c.front.trim(), c.back.trim()), back: c.back.trim() }))
 }
 
-export async function writeTopic(topicId: string, ctx: JobContext, instructions = ''): Promise<{ topicId: string; sections: number; cards: number }> {
+/** What each level of detail asks for on top of the usual rules. Standard is the usual write-up, so it adds nothing. */
+export function levelInstructions(level: NoteLevel): string {
+  if (level === 'quick')
+    return `LEVEL OF DETAIL: QUICK REVISION. I want a shorter version of this topic that I can get through quickly, without losing much content.
+- Shorter sections: about 40–110 words of notes each. Merge sections from the outline where two short ones fit naturally together.
+- Mostly tight bullets, short definitions, compact tables and numbered steps. Cut the scene-setting, long "Imagine…" stories and long worked examples; keep at most one very short example where it's really needed to get the idea.
+- Still cover every examinable point, definition, list, contrast and formula from the sources: compress, don't drop. Anything stressed still gets a "Remember:".
+- 1–3 questions per section. The topic check and the recall cards follow the usual rules.`
+  if (level === 'deep')
+    return `LEVEL OF DETAIL: IN-DEPTH. I struggle with this topic, so I want a fuller write-up that makes sure I really understand it, even though it takes longer.
+- Go slowly and build everything up from the basics. Sections can run to about two screens (up to roughly 350 words), and you can split the outline's sections into more sections where that helps.
+- For each idea: what it means in everyday words, the proper term or definition, why it works or happens (not just what), and how it connects to the ideas around it.
+- More worked examples, each walked through step by step with every step explained. More "Common mistake:" callouts, and "Check yourself:" lines that ask me something to think about before moving on.
+- Where the material is technical, show the reasoning or derivation rather than just the result.
+- 3–4 questions per section. The topic check and the recall cards follow the usual rules.
+- Still only teach what's in the material.`
+  return ''
+}
+
+const sameFront = (a: string, b: string) => a.replace(/\s+/g, ' ').trim().toLowerCase() === b.replace(/\s+/g, ' ').trim().toLowerCase()
+
+/**
+ * Write a topic at one or more levels of detail (one AI call each). Each level
+ * is kept, so you can switch between them; the first level written (in
+ * NOTE_LEVELS order) is the one shown afterwards. Writing a level the topic
+ * already has replaces just that level. With no levels given, the level shown
+ * is written again.
+ */
+export async function writeTopic(topicId: string, ctx: JobContext, instructions = '', levels: NoteLevel[] = []): Promise<{ topicId: string; sections: number; cards: number }> {
+  const first = getTopic(topicId)
+  const pick = levels.length ? levels : [first.content ? first.level : ('standard' as NoteLevel)]
+  const want = NOTE_LEVELS.filter((l) => pick.includes(l))
+  const live = ctx.live
+  let out = { topicId, sections: 0, cards: 0 }
+  for (const [i, level] of want.entries()) {
+    // Each level gets its share of the progress bar.
+    const scaled: typeof live = live && ((u) => live(u.percent == null ? u : { ...u, percent: (i + u.percent) / want.length }))
+    const r = await writeTopicLevel(topicId, { ...ctx, live: scaled }, instructions, level, i === 0, want.length > 1)
+    if (i === 0) out = r
+  }
+  return out
+}
+
+async function writeTopicLevel(topicId: string, ctx: JobContext, instructions: string, level: NoteLevel, show: boolean, several: boolean): Promise<{ topicId: string; sections: number; cards: number }> {
   const topic = getTopic(topicId)
   const course = courseRow(topic.course_id)
-  ctx.meta({ topicId, courseId: course.id })
+  ctx.meta({ topicId, courseId: course.id, level })
   setTopic(topicId, { status: 'writing', error: null })
   const work = mkdtempSync(join(tmpdir(), 'studywise-topic-'))
   const live = ctx.live ?? (() => {})
+  const levelName = NOTE_LEVEL_INFO[level].label.toLowerCase()
   try {
     ctx.progress('Gathering this topic’s sources…')
     live({ stage: 'Picking out this topic’s pages…', percent: 0.02 })
     const weekFiles = listFiles(course.id).filter((f) => f.week_id === topic.week_id)
     const src = await topicSources(weekFiles, topic.plan, work)
-    ctx.progress(`Writing ${topic.plan.title}…`)
-    live({ stage: 'Sending them to Claude…', percent: 0.06, log: src.notes.length ? src.notes : ['Sending the week’s files'] })
+    ctx.progress(several || level !== 'standard' ? `Writing ${topic.plan.title} (${levelName})…` : `Writing ${topic.plan.title}…`)
+    live({ stage: several ? `Sending them to Claude for the ${levelName} notes…` : 'Sending them to Claude…', percent: 0.06, log: src.notes.length ? src.notes : ['Sending the week’s files'] })
+
+    // Written at another level already: its recall cards (and their review history)
+    // stay, and this level reuses them rather than adding near-duplicates.
+    const otherLevels = topic.levels.filter((l) => l !== level)
+    const deckCards = topicCardIds(course.id, topicId).map((id) => repo.getCard(id))
+    const keepCards = otherLevels.length > 0 && deckCards.length > 0
+    const reuse = keepCards
+      ? `This topic is already written at another level of detail, and its recall cards are already in my spaced repetition. For "cards", reuse exactly these cards word for word (same front and back), each with the number of the section that teaches it. Leave out any this version doesn't teach, and don't add new ones:\n${deckCards.map((c) => `- front: ${JSON.stringify(c.front)} back: ${JSON.stringify(c.back)}`).join('\n')}`
+      : ''
+
     const r = await runAI<AiTopic>({
       task: 'course_topic',
       vars: {
@@ -859,7 +964,7 @@ export async function writeTopic(topicId: string, ctx: JobContext, instructions 
         topic_title: topic.plan.title,
         source_text: src.text,
         part_info: src.notes.join('\n'),
-        instructions
+        instructions: [levelInstructions(level), reuse, priorityInstructions(instructions)].filter(Boolean).join('\n\n')
       },
       files: src.attach.length ? src.attach : undefined,
       deckId: ensureWeekDeck(topic.week_id),
@@ -879,19 +984,25 @@ export async function writeTopic(topicId: string, ctx: JobContext, instructions 
     }
     if (!content.sections.length) throw new Error('Claude returned a topic with no sections.')
 
-    // Recall cards replace this topic's old ones.
-    const deckId = ensureWeekDeck(topic.week_id)
-    const old = topicCardIds(course.id, topicId)
-    if (old.length) repo.deleteCards(old)
-    const cards = repo.createCards(
-      ai.cards
-        .filter((c) => c.front.trim() && c.back.trim())
-        .map((c) => ({ deck_id: deckId, format: 'question_answer' as const, front: withPointCount(c.front.trim(), c.back.trim()), back: c.back.trim(), tags: [content.title], source: { type: 'topic' as const, ref: topicId, section: content.title } }))
-    )
-    // Section flashcards point at their deck cards, so rating one feeds spaced repetition.
-    const idByFront = new Map(cards.map((c) => [c.front, c.id]))
-    for (const s of content.sections) for (const c of s.cards ?? []) c.id = idByFront.get(c.front)
-    setTopic(topicId, { status: 'ready', error: null, content: JSON.stringify(content), progress: JSON.stringify(emptyProgress()) })
+    let cardCount = deckCards.length
+    if (keepCards) {
+      // Section flashcards point at the recall cards they match; any others are just for practice here.
+      for (const s of content.sections) for (const c of s.cards ?? []) c.id = deckCards.find((d) => sameFront(d.front, c.front))?.id
+    } else {
+      // Recall cards replace this topic's old ones.
+      const deckId = ensureWeekDeck(topic.week_id)
+      if (deckCards.length) repo.deleteCards(deckCards.map((c) => c.id))
+      const cards = repo.createCards(
+        ai.cards
+          .filter((c) => c.front.trim() && c.back.trim())
+          .map((c) => ({ deck_id: deckId, format: 'question_answer' as const, front: withPointCount(c.front.trim(), c.back.trim()), back: c.back.trim(), tags: [content.title], source: { type: 'topic' as const, ref: topicId, section: content.title } }))
+      )
+      // Section flashcards point at their deck cards, so rating one feeds spaced repetition.
+      const idByFront = new Map(cards.map((c) => [c.front, c.id]))
+      for (const s of content.sections) for (const c of s.cards ?? []) c.id = idByFront.get(c.front)
+      cardCount = cards.length
+    }
+    storeLevel(topicId, level, content, show)
     // Its cards wait until you study it.
     refreshDormancy(topicId)
     touchCourse(course.id)
@@ -905,13 +1016,64 @@ export async function writeTopic(topicId: string, ctx: JobContext, instructions 
     live({ stage: 'Saving the notes…', percent: 0.97 })
     const noteId = await syncTopicNote(topicId).catch(() => null)
     ctx.meta({ noteId })
-    return { topicId, sections: content.sections.length, cards: cards.length }
+    return { topicId, sections: content.sections.length, cards: cardCount }
   } catch (e) {
-    setTopic(topicId, { status: 'error', error: ctx.signal.aborted ? 'Cancelled' : (e as Error).message })
+    // A topic with notes already keeps them (and stays usable); the error is still shown.
+    const has = !!topicRow(topicId).content
+    setTopic(topicId, { status: has ? 'ready' : 'error', error: ctx.signal.aborted ? 'Cancelled' : (e as Error).message })
     throw e
   } finally {
     rmSync(work, { recursive: true, force: true })
   }
+}
+
+/**
+ * Save a newly written level. Shown: it becomes the topic's content (the level
+ * shown before is put aside with your progress on it). Otherwise it's put aside
+ * for later. Rewriting the level being shown always replaces it in place.
+ */
+function storeLevel(topicId: string, level: NoteLevel, content: TopicContent, show: boolean): void {
+  const row = topicRow(topicId)
+  const versions = rowVersions(row)
+  const cur = rowLevel(row)
+  const fresh = JSON.stringify(emptyProgress())
+  if (show || !row.content || cur === level) {
+    if (row.content && cur !== level) versions[cur] = { content: json<TopicContent>(row.content, null as unknown as TopicContent), progress: { ...emptyProgress(), ...json<Partial<TopicProgress>>(row.progress, {}) } }
+    delete versions[level]
+    setTopic(topicId, { status: 'ready', error: null, content: JSON.stringify(content), progress: fresh, level, versions: JSON.stringify(versions) })
+  } else {
+    versions[level] = { content, progress: emptyProgress() }
+    setTopic(topicId, { status: 'ready', error: null, versions: JSON.stringify(versions) })
+  }
+}
+
+/** Show a topic at another level of detail it's been written at. Your progress on each level is kept separately. */
+export async function setTopicLevel(topicId: string, level: NoteLevel): Promise<Topic> {
+  const row = topicRow(topicId)
+  const cur = rowLevel(row)
+  if (cur === level && row.content) return getTopic(topicId)
+  const versions = rowVersions(row)
+  const v = versions[level]
+  if (!v) throw new Error(`This topic hasn’t been written as ${NOTE_LEVEL_INFO[level].label.toLowerCase()} yet.`)
+  if (row.content) versions[cur] = { content: json<TopicContent>(row.content, null as unknown as TopicContent), progress: { ...emptyProgress(), ...json<Partial<TopicProgress>>(row.progress, {}) } }
+  delete versions[level]
+  setTopic(topicId, { content: JSON.stringify(v.content), progress: JSON.stringify({ ...emptyProgress(), ...v.progress }), level, versions: JSON.stringify(versions) })
+  refreshDormancy(topicId)
+  touchCourse(row.course_id)
+  // The topic's note follows the level shown.
+  await syncTopicNote(topicId).catch(() => null)
+  return getTopic(topicId)
+}
+
+/** Change a topic's content at every level it's written at (the one shown and the ones put aside). */
+function editAllLevels(topicId: string, fn: (c: TopicContent) => void): void {
+  const row = getDb().prepare('SELECT * FROM topics WHERE id = ?').get(topicId) as TopicRow | undefined
+  if (!row) return
+  const content = row.content ? json<TopicContent | null>(row.content, null) : null
+  if (content) fn(content)
+  const versions = rowVersions(row)
+  for (const v of Object.values(versions)) if (v) fn(v.content)
+  getDb().prepare('UPDATE topics SET content = ?, versions = ?, updated_at = ? WHERE id = ?').run(content ? JSON.stringify(content) : row.content, JSON.stringify(versions), now(), topicId)
 }
 
 // ---------------------------------------------------------------------------

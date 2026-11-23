@@ -5,6 +5,7 @@ import { IS_MOBILE } from '../lib/platform'
 import type { CourseSummary } from '@shared/course'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
+import { offerPlan } from '../lib/courseFlows'
 import { Shell, PageTitle } from '../components/Shell'
 import { Button, Card, Empty, Field, Input, Modal, Pill, ProgressBar, Textarea } from '../components/ui'
 
@@ -109,7 +110,7 @@ export function NewCourseModal() {
   const [level, setLevel] = useState('')
   const [weekLabel, setWeekLabel] = useState('Week 1')
   const [list, setList] = useState<string[]>([])
-  const [instructions, setInstructions] = useState('')
+  const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -117,7 +118,7 @@ export function NewCourseModal() {
     setList(files)
     setName('')
     setWeekLabel('Week 1')
-    setInstructions('')
+    setNote('')
     void api.settings.all().then((s) => setLevel(String(s['profile.level'] ?? '')))
   }, [files])
 
@@ -127,10 +128,13 @@ export function NewCourseModal() {
     if (!name.trim()) return
     setBusy(true)
     try {
-      const c = await api.courses.create({ name: name.trim(), level: level.trim(), weekLabel: weekLabel.trim(), files: list, instructions })
+      const c = await api.courses.create({ name: name.trim(), level: level.trim(), weekLabel: weekLabel.trim(), files: list, note })
       close()
       useStore.getState().bump()
       go({ name: 'course', id: c.id })
+      // Files are added, not planned: ask first.
+      const week = c.weeks.find((w) => w.id === c.firstWeekId)
+      if (list.length && week) await offerPlan(week, { added: week.files.length })
     } catch (e) {
       toast(errorText(e), 'bad')
     } finally {
@@ -149,7 +153,7 @@ export function NewCourseModal() {
             Cancel
           </Button>
           <Button variant="primary" loading={busy} disabled={!name.trim()} onClick={create}>
-            {list.length ? 'Create and plan week' : 'Create course'}
+            Create course
           </Button>
         </>
       }
@@ -170,8 +174,8 @@ export function NewCourseModal() {
             <FileDrop list={list} setList={setList} />
           </div>
         </div>
-        <Field label="Anything else? (optional)" hint="e.g. “The exam is all short answers” or “Skip the guest lecture”.">
-          <Textarea rows={2} value={instructions} onChange={(e) => setInstructions(e.target.value)} />
+        <Field label="Note for the AI (optional)" hint="Added to every prompt for this course. You can change it later from the course page.">
+          <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. This course is coding heavy and in C, so tailor notes to learning the theory and the coding together." />
         </Field>
       </div>
     </Modal>
