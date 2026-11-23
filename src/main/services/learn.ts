@@ -307,7 +307,17 @@ export async function buildQuestions(deckId: string, items: PlanItem[], opts: { 
         const schema = QuestionPayloads[item.type]
         const p = schema.safeParse(cached)
         if (p.success) {
-          const payload = item.type === 'choice_blank' ? { ...(p.data as z.infer<typeof QuestionPayloads.choice_blank>), choices: (p.data as z.infer<typeof QuestionPayloads.choice_blank>).choices.map((c) => shuffle(c)) } : p.data
+          // Answers go in new places every time a cached question comes back.
+          const mc = p.data as z.infer<typeof QuestionPayloads.multiple_choice>
+          const payload =
+            item.type === 'choice_blank'
+              ? { ...(p.data as z.infer<typeof QuestionPayloads.choice_blank>), choices: (p.data as z.infer<typeof QuestionPayloads.choice_blank>).choices.map((c) => shuffle(c)) }
+              : item.type === 'multiple_choice'
+                ? (() => {
+                    const s = shuffleOptions(mc.options, mc.correct_index)
+                    return { ...mc, options: s.options, correct_index: s.answer }
+                  })()
+                : p.data
           out.set(idx, { id: uid(), type: item.type, card_id: card.id, card_ids: [card.id], payload, cached: true } as LearnQuestion)
           return
         }
@@ -497,17 +507,46 @@ export async function submitAnswer(sessionId: string | null, deckId: string, q: 
 export function overrideAttempt(attemptId: string): Mark {
   const row = getDb().prepare('SELECT * FROM answer_attempts WHERE id = ?').get(attemptId) as { mark: string; card_id: string; qtype: string } | undefined
   if (!row) throw new Error('Answer not found')
-  const m = json<Mark & { prev?: Record<string, ReviewState | null> }>(row.mark, { score: 0, verdict: 'wrong', by: 'code' })
+  const m = json<OverrideMark>(row.mark, { score: 0, verdict: 'wrong', by: 'code' })
   const d = getDb()
+  const cur = d.prepare('SELECT score, verdict, overridden FROM answer_attempts WHERE id = ?').get(attemptId) as { score: number; verdict: Mark['verdict']; overridden: number }
+  if (cur.overridden) return { ...stripOverride(m), score: 10, verdict: 'correct' }
   d.transaction(() => {
+    // What the schedule looked like after the first marking, so "undo" can put it back.
+    const after: Record<string, ReviewState | null> = {}
     for (const [cardId, state] of Object.entries(m.prev ?? {})) {
+      after[cardId] = repo.getReviewState(cardId)
       if (state) repo.writeReviewState({ ...state, card_id: cardId })
       else d.prepare('DELETE FROM review_state WHERE card_id = ?').run(cardId)
       repo.applyReview(cardId, 3, 'learn')
     }
-    d.prepare("UPDATE answer_attempts SET overridden = 1, verdict = 'correct', score = 10 WHERE id = ?").run(attemptId)
+    const saved: OverrideMark = { ...m, undo: { score: cur.score, verdict: cur.verdict, states: after } }
+    d.prepare("UPDATE answer_attempts SET overridden = 1, verdict = 'correct', score = 10, mark = ? WHERE id = ?").run(JSON.stringify(saved), attemptId)
   })()
-  return { ...m, score: 10, verdict: 'correct' }
+  return { ...stripOverride(m), score: 10, verdict: 'correct' }
+}
+
+type OverrideMark = Mark & { prev?: Record<string, ReviewState | null>; undo?: { score: number; verdict: Mark['verdict']; states: Record<string, ReviewState | null> } }
+const stripOverride = ({ undo: _u, ...m }: OverrideMark): Mark => m
+
+/** Take back "I was right": the answer's first mark and the schedule it gave come back. */
+export function undoOverride(attemptId: string): Mark {
+  const row = getDb().prepare('SELECT mark, overridden FROM answer_attempts WHERE id = ?').get(attemptId) as { mark: string; overridden: number } | undefined
+  if (!row) throw new Error('Answer not found')
+  const m = json<OverrideMark>(row.mark, { score: 0, verdict: 'wrong', by: 'code' })
+  if (!row.overridden || !m.undo) throw new Error('That answer wasn’t marked as right by you')
+  const { undo, ...rest } = m
+  const d = getDb()
+  d.transaction(() => {
+    for (const [cardId, state] of Object.entries(undo.states)) {
+      if (state) repo.writeReviewState({ ...state, card_id: cardId })
+      else d.prepare('DELETE FROM review_state WHERE card_id = ?').run(cardId)
+      // The review the override added goes too.
+      d.prepare("DELETE FROM review_log WHERE id = (SELECT MAX(id) FROM review_log WHERE card_id = ? AND source = 'learn')").run(cardId)
+    }
+    d.prepare('UPDATE answer_attempts SET overridden = 0, verdict = ?, score = ?, mark = ? WHERE id = ?').run(undo.verdict, undo.score, JSON.stringify(rest), attemptId)
+  })()
+  return { ...stripOverride(rest), score: undo.score, verdict: undo.verdict }
 }
 
 export function getAttempt(id: string): { q: LearnQuestion; a: LearnAnswer; mark: Mark; deckId: string; feedback: unknown } {

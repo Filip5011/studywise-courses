@@ -19,6 +19,7 @@ import { GenerateCardsModal, CardPreviewModal, jobDeck, jobToast } from './compo
 import { GenerateNotesModal, followNoteJobs } from './components/GenerateNotes'
 import { Button, Spinner, cx, useModalCount } from './components/ui'
 import { Home } from './pages/Home'
+import { useStudyTimer } from './lib/studyTime'
 import { Onboarding } from './components/Onboarding'
 import { Decks } from './pages/Decks'
 import { DeckPage } from './pages/Deck'
@@ -51,6 +52,8 @@ export function App() {
   const [zoom, setZoom] = useState(1)
   const [ready, setReady] = useState(false)
   const [onboarding, setOnboarding] = useState(false)
+  // Counts time spent on study pages, for the home page.
+  useStudyTimer()
 
   // Boot: settings, last route, claude status, jobs.
   useEffect(() => {
@@ -319,7 +322,7 @@ export function App() {
       if (here.name === 'week') {
         void api.courses
           .get({ id: here.courseId })
-          .then((c) => dropOnWeek(here.weekId, c.weeks.find((w) => w.id === here.weekId)?.label ?? 'this week', all))
+          .then((c) => dropOnWeek(here.weekId, c.weeks.find((w) => w.id === here.weekId)?.label ?? 'this week', all, here.courseId))
           .catch((err) => toast(errorText(err), 'bad'))
         return
       }

@@ -1,5 +1,6 @@
 import { api, errorText } from './api'
 import { chooseDialog, confirmDialog } from './dialogs'
+import { offerPlan } from './courseFlows'
 import { toast, useStore } from './store'
 
 /**
@@ -53,14 +54,17 @@ export const WEEK_SOURCE = /\.(pdf|docx|pptx|txt|md|markdown|vtt|srt|html?|rtf|c
  * and a shared .studyweek is merged into it (its topics, cards and files join
  * this week's) after a confirm.
  */
-export async function dropOnWeek(weekId: string, weekLabel: string, paths: string[]): Promise<void> {
+export async function dropOnWeek(weekId: string, weekLabel: string, paths: string[], courseId?: string): Promise<void> {
   const shared = paths.filter((p) => /\.studyweek$/i.test(p))
   const sources = paths.filter((p) => WEEK_SOURCE.test(p))
   const skipped = paths.length - shared.length - sources.length
   try {
     if (sources.length) {
       await api.courses.addFiles({ weekId, files: sources })
-      toast(`Added ${sources.length} file${sources.length === 1 ? '' : 's'} to ${weekLabel}${skipped ? ` (${skipped} skipped: that kind of file can’t be read)` : ''}. Plan the week again to use them.`, 'good')
+      if (skipped) toast(`${skipped} file${skipped === 1 ? '' : 's'} skipped: that kind of file can’t be read.`, 'info')
+      // Adding files never plans by itself: ask first.
+      const week = courseId ? (await api.courses.get({ id: courseId })).weeks.find((w) => w.id === weekId) : undefined
+      await offerPlan(week ?? { id: weekId, label: weekLabel }, { added: sources.length })
     } else if (skipped && !shared.length) {
       toast('That kind of file can’t be added to a week. Try PDF, Word, PowerPoint, text, Markdown, a web page, RTF, CSV or a picture.', 'bad')
     }

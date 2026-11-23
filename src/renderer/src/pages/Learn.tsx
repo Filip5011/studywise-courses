@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keyLabel } from '@shared/keymap'
-import { X, Settings2, Lightbulb, RefreshCw, MessageCircleQuestion, ThumbsUp, SkipForward, ArrowRight, Sparkles, Trophy, Brain, CheckCircle2, XCircle, CircleDot, Database, RotateCcw } from 'lucide-react'
-import type { LearnQuestion, LearnAnswer, Mark } from '@shared/questions'
+import { X, Settings2, Lightbulb, RefreshCw, MessageCircleQuestion, ThumbsUp, SkipForward, ArrowRight, Sparkles, Trophy, Brain, CheckCircle2, XCircle, CircleDot, Database, RotateCcw, Undo2 } from 'lucide-react'
+import { reshuffleLearnQuestion, type LearnQuestion, type LearnAnswer, type Mark } from '@shared/questions'
 import { insertRetry } from '@shared/retry'
 import { QUESTION_LABELS, QUESTION_TYPES, type LearnSettings, type CustomAction, type QuestionType } from '@shared/types'
 import { useStore, toast } from '../lib/store'
@@ -107,7 +107,10 @@ export function Learn({ deckId, cardIds }: { deckId: string; cardIds?: string[] 
 
   const turn = order[idx]
   const base = turn?.base ?? idx
-  const q = questions[base]
+  // A missed question that comes back has its answers in new places.
+  const asked = questions[base]
+  const retryNo = turn?.retry ?? 0
+  const q = useMemo(() => (asked && retryNo > 0 ? reshuffleLearnQuestion(asked, `retry${retryNo}`) : asked), [asked, retryNo])
   const slot = slots[idx] ?? emptySlot()
   const patchSlot = (i: number, p: Partial<Slot>) => setSlots((cur) => ({ ...cur, [i]: { ...(cur[i] ?? emptySlot()), ...p } }))
 
@@ -167,9 +170,25 @@ export function Learn({ deckId, cardIds }: { deckId: string; cardIds?: string[] 
   }
   const override = async () => {
     if (!slot.attemptId || slot.mark?.verdict === 'correct') return
-    const m = await api.learn.override({ attemptId: slot.attemptId })
-    patchSlot(idx, { mark: m, overridden: true })
-    toast('Marked as correct. Your schedule was updated.', 'good')
+    try {
+      const m = await api.learn.override({ attemptId: slot.attemptId })
+      patchSlot(idx, { mark: m, overridden: true })
+      const at = idx
+      const attemptId = slot.attemptId
+      toast('Marked as correct. Your schedule was updated.', 'good', { label: 'Undo', run: () => void undoOverride(at, attemptId) })
+    } catch (e) {
+      toast(errorText(e), 'bad')
+    }
+  }
+  /** Take back "I was right": the first mark and the schedule it gave come back. */
+  const undoOverride = async (at = idx, attemptId = slot.attemptId) => {
+    if (!attemptId) return
+    try {
+      const m = await api.learn.undoOverride({ attemptId })
+      patchSlot(at, { mark: m, overridden: false })
+    } catch (e) {
+      toast(errorText(e), 'bad')
+    }
   }
   const regenerate = async () => {
     if (!q || slot.mark || regenerating) return
@@ -215,7 +234,7 @@ export function Learn({ deckId, cardIds }: { deckId: string; cardIds?: string[] 
       'learn.hint': hint,
       'learn.feedback': () => slot.mark && getFeedback(),
       'learn.skip': () => !slot.marking && next(),
-      'learn.override': override,
+      'learn.override': () => (slot.overridden ? undoOverride() : override()),
       'learn.regenerate': regenerate,
       'learn.settings': () => setSettingsOpen(true),
       'ai.explain': () => explain(),
@@ -407,6 +426,11 @@ export function Learn({ deckId, cardIds }: { deckId: string; cardIds?: string[] 
                   {verdict !== 'correct' && (
                     <Button size="sm" variant="outline" onClick={override} title="I was right (R)">
                       I was right
+                    </Button>
+                  )}
+                  {slot.overridden && (
+                    <Button size="sm" variant="outline" onClick={() => void undoOverride()} title="Undo: put back the original mark (R)">
+                      <Undo2 className="size-4" /> Undo
                     </Button>
                   )}
                   <Button size="sm" variant="ink" onClick={next}>

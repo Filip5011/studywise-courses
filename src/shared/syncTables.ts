@@ -12,6 +12,8 @@ export interface SyncTable {
   pk: string[]
   /** Append-only tables whose own id is a local counter (it isn't copied). */
   localId?: string
+  /** The migration that added the table, for tables added after syncing started (migration 6). */
+  since?: number
 }
 
 export const SYNC_TABLES: SyncTable[] = [
@@ -27,7 +29,9 @@ export const SYNC_TABLES: SyncTable[] = [
   { name: 'courses', pk: ['id'] },
   { name: 'weeks', pk: ['id'] },
   { name: 'course_files', pk: ['id'] },
-  { name: 'topics', pk: ['id'] }
+  { name: 'topics', pk: ['id'] },
+  // One row per day per device, so two devices never write the same row.
+  { name: 'study_time', pk: ['day', 'device'], since: 9 }
 ]
 
 export const KEY_SEP = '\x1f'
@@ -53,9 +57,13 @@ function logRow(t: SyncTable, row: 'NEW' | 'OLD', deleted: 0 | 1): string {
   )
 }
 
-/** The triggers that record local writes. Writes made while applying another device's changes aren't recorded. */
-export function syncTriggersSql(): string {
-  return SYNC_TABLES.map(
+/**
+ * The triggers that record local writes. Writes made while applying another
+ * device's changes aren't recorded. By default, the tables that existed when
+ * syncing started; later migrations pass the tables they add.
+ */
+export function syncTriggersSql(tables: SyncTable[] = SYNC_TABLES.filter((t) => !t.since)): string {
+  return tables.map(
     (t) => `
   CREATE TRIGGER sync_${t.name}_ins AFTER INSERT ON ${t.name} WHEN ${NOT_APPLYING} BEGIN ${logRow(t, 'NEW', 0)} END;
   CREATE TRIGGER sync_${t.name}_upd AFTER UPDATE ON ${t.name} WHEN ${NOT_APPLYING} BEGIN ${logRow(t, 'NEW', 0)} END;

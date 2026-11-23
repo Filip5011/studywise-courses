@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
-import { Button, Input, Modal, Select } from '../components/ui'
+import { Check } from 'lucide-react'
+import { NOTE_LEVELS, NOTE_LEVEL_INFO, type NoteLevel } from '@shared/course'
+import { Button, Input, Modal, Select, Textarea, cx } from '../components/ui'
 
 interface Ask {
   title: string
@@ -8,10 +10,20 @@ interface Ask {
   initial?: string
   confirmText?: string
   danger?: boolean
-  /** "confirm" shows only a message; "text" asks for a string; "choose" picks from options. */
-  kind: 'text' | 'confirm' | 'choose'
+  /**
+   * "confirm" shows only a message; "text" asks for a string; "choose" picks from
+   * options; "plan" asks whether to plan, with optional instructions; "write" picks
+   * levels of detail, with optional instructions.
+   */
+  kind: 'text' | 'confirm' | 'choose' | 'plan' | 'write'
   message?: string
   options?: { value: string; label: string }[]
+  /** For "write": levels ticked to start with, whether more than one can be picked, and levels already written. */
+  levels?: NoteLevel[]
+  multi?: boolean
+  written?: NoteLevel[]
+  cancelText?: string
+  placeholder?: string
   resolve: (v: string | null) => void
 }
 
@@ -27,14 +39,90 @@ export function chooseDialog(title: string, options: { value: string; label: str
   return new Promise((resolve) => useDialog.getState().set({ title, kind: 'choose', options, ...opts, resolve }))
 }
 
+/**
+ * Ask before planning a week. Resolves to the instructions typed (maybe empty)
+ * to plan now, or null to leave it for later.
+ */
+export function askPlan(title: string, opts: { message?: string; confirmText?: string; cancelText?: string; danger?: boolean; placeholder?: string } = {}): Promise<string | null> {
+  return new Promise((resolve) => useDialog.getState().set({ title, kind: 'plan', confirmText: 'Plan topics', cancelText: 'Not now', ...opts, resolve }))
+}
+
+const LEVELS_KEY = 'studywise.writeLevels'
+const lastLevels = (): NoteLevel[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(LEVELS_KEY) ?? '[]') as string[]
+    const ok = NOTE_LEVELS.filter((l) => v.includes(l))
+    return ok.length ? ok : ['standard']
+  } catch {
+    return ['standard']
+  }
+}
+
+/**
+ * Pick the level(s) of detail to write topics at, and optional instructions.
+ * Null when cancelled. With `multi`, several levels can be ticked (each is a
+ * separate write, and every level is kept).
+ */
+export function askWrite(
+  title: string,
+  opts: { message?: string; confirmText?: string; levels?: NoteLevel[]; multi?: boolean; written?: NoteLevel[]; placeholder?: string; danger?: boolean } = {}
+): Promise<{ levels: NoteLevel[]; instructions: string } | null> {
+  return new Promise((resolve) =>
+    useDialog.getState().set({
+      title,
+      kind: 'write',
+      confirmText: 'Write',
+      multi: true,
+      ...opts,
+      levels: opts.levels ?? lastLevels(),
+      resolve: (v) => resolve(v === null ? null : (JSON.parse(v) as { levels: NoteLevel[]; instructions: string }))
+    })
+  )
+}
+
+function LevelPicker({ value, onChange, multi, written }: { value: NoteLevel[]; onChange: (v: NoteLevel[]) => void; multi: boolean; written: NoteLevel[] }) {
+  return (
+    <div className="flex flex-col gap-2" role={multi ? 'group' : 'radiogroup'} aria-label="Level of detail">
+      {NOTE_LEVELS.map((l) => {
+        const on = value.includes(l)
+        return (
+          <button
+            key={l}
+            type="button"
+            role={multi ? 'checkbox' : 'radio'}
+            aria-checked={on}
+            onClick={() => onChange(multi ? (on ? value.filter((x) => x !== l) : NOTE_LEVELS.filter((x) => x === l || value.includes(x))) : [l])}
+            className={cx(
+              'flex items-start gap-3 rounded-xl border px-4 py-3 text-left transition-colors',
+              on ? 'border-accent bg-accent-soft/50' : 'border-line hover:border-[color-mix(in_oklab,var(--ink)_22%,transparent)]'
+            )}
+          >
+            <span className={cx('mt-0.5 grid size-5 shrink-0 place-items-center border', multi ? 'rounded-md' : 'rounded-full', on ? 'border-accent bg-accent text-accent-ink' : 'border-line')}>
+              {on && <Check className="size-3.5" />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="font-semibold">{NOTE_LEVEL_INFO[l].label}</span>
+              {l === 'standard' && <span className="ml-1.5 text-[0.8rem] text-muted">default</span>}
+              {written.includes(l) && <span className="ml-1.5 text-[0.8rem] text-muted">· already written, this replaces it</span>}
+              <span className="block text-[0.86rem] text-muted">{NOTE_LEVEL_INFO[l].about}</span>
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export function DialogHost() {
   const ask = useDialog((s) => s.ask)
   const set = useDialog((s) => s.set)
   const [value, setValue] = useState('')
+  const [levels, setLevels] = useState<NoteLevel[]>([])
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (ask) {
       setValue(ask.initial ?? ask.options?.[0]?.value ?? '')
+      setLevels(ask.levels ?? ['standard'])
       setTimeout(() => ref.current?.select(), 30)
     }
   }, [ask])
@@ -45,8 +133,14 @@ export function DialogHost() {
   }
   const ok = () => {
     if (ask.kind === 'text' && !value.trim()) return
+    if (ask.kind === 'write') {
+      if (!levels.length) return
+      if (ask.multi) localStorage.setItem(LEVELS_KEY, JSON.stringify(levels))
+      return close(JSON.stringify({ levels, instructions: value.trim() }))
+    }
     close(ask.kind === 'confirm' ? 'ok' : value.trim())
   }
+  const many = ask.kind === 'write' && levels.length > 1
   return (
     <Modal
       open
@@ -55,10 +149,11 @@ export function DialogHost() {
       footer={
         <>
           <Button variant="ghost" onClick={() => close(null)}>
-            Cancel
+            {ask.cancelText ?? 'Cancel'}
           </Button>
-          <Button variant={ask.danger ? 'danger' : 'primary'} onClick={ok}>
+          <Button variant={ask.danger ? 'danger' : 'primary'} onClick={ok} disabled={ask.kind === 'write' && !levels.length}>
             {ask.confirmText ?? 'OK'}
+            {many ? ` · ${levels.length} levels` : ''}
           </Button>
         </>
       }
@@ -80,6 +175,32 @@ export function DialogHost() {
               </option>
             ))}
           </Select>
+        )}
+        {ask.kind === 'write' && (
+          <>
+            <div className="text-[0.84rem] font-medium text-ink/80">{ask.multi ? 'Level of detail (pick one or more)' : 'Level of detail'}</div>
+            <LevelPicker value={levels} onChange={setLevels} multi={!!ask.multi} written={ask.written ?? []} />
+            {many && <p className="text-[0.84rem] text-muted">Each level is written separately (one AI call each) and all of them are kept. Pick which one to study on the week page.</p>}
+          </>
+        )}
+        {(ask.kind === 'plan' || ask.kind === 'write') && (
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[0.84rem] font-medium text-ink/80">Your instructions (optional)</span>
+            <Textarea
+              rows={3}
+              autoFocus={ask.kind === 'plan'}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault()
+                  ok()
+                }
+              }}
+              placeholder={ask.placeholder ?? (ask.kind === 'plan' ? 'e.g. Skip the guest lecture. Give the recursion examples their own topic.' : 'e.g. More code examples. Go really slowly on pointers.')}
+            />
+            <span className="text-[0.8rem] text-muted">These take priority over the usual {ask.kind === 'plan' ? 'planning' : 'writing'} rules.</span>
+          </label>
         )}
         <button type="submit" hidden />
       </form>

@@ -19,7 +19,7 @@ import * as updates from './updater'
 import * as explain from './services/explain'
 import * as course from './services/course'
 import * as weekShare from './services/weekShare'
-import { CourseQuestion } from '@shared/course'
+import { CourseQuestion, NOTE_LEVELS } from '@shared/course'
 import * as io from './importexport'
 import { backupLibrary, restoreLibrary } from './backup'
 import * as library from './library'
@@ -375,21 +375,17 @@ export const handlers = {
   courses: {
     list: h(none, () => course.listCourses()),
     get: h(z.object({ id }), (i) => course.getCourse(i.id)),
-    create: h(z.object({ name: z.string().min(1).max(200), level: z.string().max(200).default(''), weekLabel: z.string().max(100).default(''), files: z.array(z.string()).max(200).default([]), instructions: z.string().max(4000).default('') }), async (i) => {
+    // Files are only added here; planning waits until you say so (courses.plan).
+    create: h(z.object({ name: z.string().min(1).max(200), level: z.string().max(200).default(''), weekLabel: z.string().max(100).default(''), files: z.array(z.string()).max(200).default([]), note: z.string().max(4000).default('') }), async (i) => {
       const c = course.createCourse(i)
+      if (i.note.trim()) course.setCourseNote(c.id, i.note)
       const w = course.addWeek(c.id, i.weekLabel)
-      if (i.files.length) {
-        await course.addFiles(w.id, i.files)
-        startJob('course_outline', `Plan: ${c.name} · ${w.label}`, (ctx) => course.planWeek(w.id, ctx, i.instructions))
-      }
-      return c
+      if (i.files.length) await course.addFiles(w.id, i.files)
+      return { ...course.getCourse(c.id), firstWeekId: w.id }
     }),
-    addWeek: h(z.object({ courseId: id, label: z.string().max(100).default(''), files: z.array(z.string()).max(200).default([]), instructions: z.string().max(4000).default('') }), async (i) => {
+    addWeek: h(z.object({ courseId: id, label: z.string().max(100).default(''), files: z.array(z.string()).max(200).default([]) }), async (i) => {
       const w = course.addWeek(i.courseId, i.label)
-      if (i.files.length) {
-        await course.addFiles(w.id, i.files)
-        startJob('course_outline', `Plan: ${course.getCourse(i.courseId).name} · ${w.label}`, (ctx) => course.planWeek(w.id, ctx, i.instructions))
-      }
+      if (i.files.length) await course.addFiles(w.id, i.files)
       return w
     }),
     renameWeek: h(z.object({ weekId: id, label: z.string().min(1).max(100) }), (i) => course.renameWeek(i.weekId, i.label)),
@@ -411,10 +407,15 @@ export const handlers = {
       const w = c.weeks.find((x) => x.id === i.weekId)!
       return startJob('course_outline', `Plan: ${c.name} · ${w.label}`, (ctx) => course.planWeek(i.weekId, ctx, i.instructions))
     }),
-    write: h(z.object({ topicIds: z.array(id).min(1).max(200), instructions: z.string().max(4000).default('') }), (i) => {
+    /** Write topics at one or more levels of detail (all levels are kept). No levels: write the level shown again. */
+    write: h(z.object({ topicIds: z.array(id).min(1).max(200), instructions: z.string().max(4000).default(''), levels: z.array(z.enum(NOTE_LEVELS)).max(3).default([]) }), (i) => {
       const topics = i.topicIds.map((tid) => course.getTopic(tid)).filter((t) => t.status !== 'writing')
-      return topics.map((t) => startJob('course_topic', `Topic: ${t.plan.title}`, (ctx) => course.writeTopic(t.id, ctx, i.instructions)))
+      return topics.map((t) => startJob('course_topic', `Topic: ${t.plan.title}`, (ctx) => course.writeTopic(t.id, ctx, i.instructions, i.levels)))
     }),
+    /** Show a topic at another level of detail it's written at. */
+    setLevel: h(z.object({ topicId: id, level: z.enum(NOTE_LEVELS) }), (i) => course.setTopicLevel(i.topicId, i.level)),
+    /** Your note to the AI about the course, put into every prompt for it. */
+    setNote: h(z.object({ courseId: id, note: z.string().max(4000) }), (i) => course.setCourseNote(i.courseId, i.note)),
     topic: h(z.object({ id }), (i) => course.getTopic(i.id)),
     rateCard: h(z.object({ topicId: id, front: z.string().min(1), cardId: z.string().optional(), rating: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]) }), (i) =>
       course.rateTopicCard(i.topicId, i.front, i.rating, i.cardId)
@@ -480,6 +481,13 @@ export const handlers = {
     setExamDate: h(z.object({ courseId: id, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable() }), (i) => course.setExamDate(i.courseId, i.date))
   },
 
+  stats: {
+    /** Time studied, topics and card stats for the home page. */
+    home: h(none, () => repo.homeStats()),
+    /** Seconds spent studying since the last call (sent every minute or so while you study). */
+    addTime: h(z.object({ seconds: z.number().min(0).max(600) }), (i) => repo.addStudyTime(i.seconds))
+  },
+
   sync: {
     status: h(none, () => syncServer.syncStatus()),
     setEnabled: h(z.object({ enabled: z.boolean() }), (i) => syncServer.setSyncEnabled(i.enabled)),
@@ -502,6 +510,7 @@ export const handlers = {
     batch: h(z.object({ sessionId: id, batch: z.number().int().min(0) }), (i) => learn.getBatch(i.sessionId, i.batch)),
     submit: h(z.object({ sessionId: z.string().nullable(), deckId: id, question: LearnQuestionSchema, answer: LearnAnswerSchema, retry: z.boolean().optional() }), (i) => learn.submitAnswer(i.sessionId, i.deckId, i.question, i.answer, i.retry)),
     override: h(z.object({ attemptId: id }), (i) => learn.overrideAttempt(i.attemptId)),
+    undoOverride: h(z.object({ attemptId: id }), (i) => learn.undoOverride(i.attemptId)),
     feedback: h(z.object({ attemptId: id }), (i) => learn.feedbackFor(i.attemptId)),
     hint: h(z.object({ cardId: id, question: LearnQuestionSchema, index: z.number().int().min(0).max(1), previous: z.array(z.string()) }), (i) => learn.hintFor(i.cardId, i.question, i.index, i.previous)),
     regenerate: h(z.object({ deckId: id, question: LearnQuestionSchema }), (i) => learn.regenerateQuestion(i.deckId, i.question)),

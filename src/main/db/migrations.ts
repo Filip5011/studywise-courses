@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { SYNC_SCHEMA_SQL } from '@shared/syncTables'
+import { SYNC_SCHEMA_SQL, SYNC_TABLES, syncTriggersSql } from '@shared/syncTables'
 
 // Each entry runs once, in order. user_version tracks how many have run.
 export const MIGRATIONS: string[] = [
@@ -254,6 +254,18 @@ export const MIGRATIONS: string[] = [
   /* 8: topic cards wait until you've studied them; courses have an exam date */ `
   ALTER TABLE cards ADD COLUMN dormant INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE courses ADD COLUMN exam_date TEXT;
+  `,
+  /* 9: a note for the AI per course; topics written at more than one level of detail; time studied */ `
+  ALTER TABLE courses ADD COLUMN note TEXT NOT NULL DEFAULT '';
+  ALTER TABLE topics ADD COLUMN level TEXT NOT NULL DEFAULT 'standard';
+  ALTER TABLE topics ADD COLUMN versions TEXT NOT NULL DEFAULT '{}';
+  CREATE TABLE study_time (
+    day TEXT NOT NULL,
+    device TEXT NOT NULL,
+    seconds INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, device)
+  );
+  ${syncTriggersSql(SYNC_TABLES.filter((t) => t.since === 9))}
   `
 ]
 

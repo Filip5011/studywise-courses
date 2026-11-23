@@ -131,6 +131,27 @@ export const emptyProgress = (): TopicProgress => ({ section: 0, done: false, an
 
 export type TopicStatus = 'planned' | 'writing' | 'ready' | 'error'
 
+/**
+ * How much detail a topic's notes go into. Standard is the usual write-up;
+ * quick revision is shorter but covers nearly as much; in-depth takes longer
+ * and goes slowly through everything, for topics you struggle with. A topic
+ * can be written at several levels and keeps each one.
+ */
+export const NOTE_LEVELS = ['standard', 'quick', 'deep'] as const
+export type NoteLevel = (typeof NOTE_LEVELS)[number]
+export const NOTE_LEVEL_INFO: Record<NoteLevel, { label: string; short: string; about: string }> = {
+  standard: { label: 'Standard', short: 'Standard', about: 'The usual notes: every examinable point, explained simply.' },
+  quick: { label: 'Quick revision', short: 'Quick', about: 'Shorter sections that take less time, still covering nearly everything.' },
+  deep: { label: 'In-depth', short: 'In-depth', about: 'A fuller write-up that goes slowly through everything. For topics you struggle with.' }
+}
+export const isNoteLevel = (v: unknown): v is NoteLevel => typeof v === 'string' && (NOTE_LEVELS as readonly string[]).includes(v)
+
+/** A level that's written but not the one being shown, with your progress on it. */
+export interface TopicVersion {
+  content: TopicContent
+  progress: TopicProgress
+}
+
 export interface Topic {
   id: string
   course_id: string
@@ -145,6 +166,10 @@ export interface Topic {
   card_count: number
   /** The topic's notes, saved as a note when it's written. */
   note_id: string | null
+  /** The level of detail of `content` (the one being shown). */
+  level: NoteLevel
+  /** Every level written for this topic, in NOTE_LEVELS order. */
+  levels: NoteLevel[]
   updated_at: string
 }
 
@@ -191,6 +216,8 @@ export interface Course {
   deck_folder_id: string | null
   /** YYYY-MM-DD. Recall is steady until EXAM_REVISION_DAYS before it, then ramps up, and every card gets a last look before it. */
   exam_date: string | null
+  /** Your note to the AI about this course, added to every prompt for it ("this course is coding heavy…"). */
+  note: string
   created_at: string
   updated_at: string
 }
@@ -355,6 +382,26 @@ export function shuffleOptions(options: string[], answer: number, rand: () => nu
 /** Every multiple-choice question with its options shuffled. */
 export function shuffleMcqs(qs: CourseQuestion[]): CourseQuestion[] {
   return qs.map((q) => (q.type === 'mcq' ? { ...q, ...shuffleOptions(q.options, q.answer) } : q))
+}
+
+/**
+ * Options in a new random order where the right answer never stays where it
+ * was (when there's more than one option), so a retried question can't be
+ * answered from memory of where the answer sat.
+ */
+export function moveAnswer(options: string[], answer: number, rand: () => number = Math.random): { options: string[]; answer: number } {
+  if (options.length < 2) return { options, answer }
+  for (let i = 0; i < 6; i++) {
+    const s = shuffleOptions(options, answer, rand)
+    if (s.answer !== answer) return s
+  }
+  // Unlucky: rotate by one, which always moves it.
+  return { options: [...options.slice(1), options[0]], answer: (answer - 1 + options.length) % options.length }
+}
+
+/** The same course question with its answers in new places, for when it comes back. */
+export function reshuffleQuestion(q: CourseQuestion, rand: () => number = Math.random): CourseQuestion {
+  return q.type === 'mcq' ? { ...q, ...moveAnswer(q.options, q.answer, rand) } : q
 }
 
 // ---------------------------------------------------------------------------

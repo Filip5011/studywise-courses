@@ -52,6 +52,16 @@ const zipPath = (p: string) => p.split(sep).join('/')
 export const weekFileName = (course: string, week: string) => `${safeFileName(`${course} - ${week}`)}.${WEEK_EXT}`
 export const isWeekFile = (f: string) => basename(f).toLowerCase().endsWith(`.${WEEK_EXT}`)
 
+/** A topic's other levels (topics.versions) with the progress taken out. */
+function noProgress(versions: unknown): string {
+  try {
+    const v = JSON.parse(typeof versions === 'string' ? versions : '{}') as Record<string, { content: unknown; progress?: unknown }>
+    return JSON.stringify(Object.fromEntries(Object.entries(v).map(([k, x]) => [k, { content: x.content, progress: {} }])))
+  } catch {
+    return '{}'
+  }
+}
+
 export async function exportWeek(weekId: string, file: string): Promise<WeekPreview> {
   const d = getDb()
   const week = d.prepare('SELECT * FROM weeks WHERE id = ?').get(weekId) as Row | undefined
@@ -60,7 +70,8 @@ export async function exportWeek(weekId: string, file: string): Promise<WeekPrev
   const courseDir = join(paths.courses, String(course.id))
   const files = (d.prepare('SELECT * FROM course_files WHERE week_id = ? ORDER BY position').all(weekId) as Row[]).map((f) => ({ ...f, path: zipPath(relative(courseDir, String(f.path))) }))
   // Your progress and the link to your own copy of the notes stay with you.
-  const topics = (d.prepare('SELECT * FROM topics WHERE week_id = ? ORDER BY position').all(weekId) as Row[]).map((t) => ({ ...t, progress: '{}', note_id: null }))
+  // Every level of detail a topic is written at goes, without your progress on it.
+  const topics = (d.prepare('SELECT * FROM topics WHERE week_id = ? ORDER BY position').all(weekId) as Row[]).map((t) => ({ ...t, progress: '{}', note_id: null, versions: noProgress(t.versions) }))
   const cards = week.deck_id ? (d.prepare('SELECT * FROM cards WHERE deck_id = ?').all(week.deck_id) as Row[]) : []
   const json: WeekJson = {
     app: 'studywise-courses',
@@ -224,6 +235,7 @@ export async function importWeek(
         // Anything mid-write when it was shared isn't being written here.
         ...(tp.status === 'writing' ? { status: 'error', error: 'Interrupted. Write it again.' } : {}),
         progress: '{}',
+        ...(tp.versions !== undefined ? { versions: noProgress(tp.versions) } : {}),
         note_id: null,
         updated_at: t
       }))

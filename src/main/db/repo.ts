@@ -1,5 +1,5 @@
 import { getDb, uid, now, json } from './index'
-import type { Card, CardInput, Deck, Folder, Note, ReviewState, ModelChoice, LearnSettings, Thresholds, AiCall } from '@shared/types'
+import type { Card, CardInput, Deck, Folder, Note, ReviewState, ModelChoice, LearnSettings, Thresholds, AiCall, HomeStats } from '@shared/types'
 import { CardInput as CardInputSchema } from '@shared/types'
 import { parseRequiredPoints, countBlanks } from '@shared/ssText'
 import { isDue, masteryOf } from '@shared/sm2'
@@ -379,6 +379,18 @@ function examDateOfDeck(deckId: string): string | null {
   return r?.exam_date ?? null
 }
 
+/** Your note to the AI for the course a deck belongs to (a week deck, or an old course-wide deck), or ''. */
+export function courseNoteForDeck(deckId: string): string {
+  try {
+    const r = getDb()
+      .prepare('SELECT c.note FROM courses c WHERE c.deck_id = ? OR c.id IN (SELECT course_id FROM weeks WHERE deck_id = ?) LIMIT 1')
+      .get(deckId, deckId) as { note: string | null } | undefined
+    return r?.note?.trim() ?? ''
+  } catch {
+    return '' // a database from before course notes
+  }
+}
+
 /** Exam dates of every course week deck that has one. */
 function examDatesByDeck(): Map<string, string> {
   const rows = getDb().prepare('SELECT w.deck_id, c.exam_date FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.deck_id IS NOT NULL AND c.exam_date IS NOT NULL').all() as { deck_id: string; exam_date: string }[]
@@ -550,4 +562,90 @@ export function overview(days = 84) {
     }
   }
   return { activity, streak, today, week, next }
+}
+
+// ---------- time studied ----------
+
+/** Add time spent studying (on a topic, flashcards, Learn or notes) to today, on this device. */
+export function addStudyTime(seconds: number, at = new Date()): void {
+  const s = Math.round(Math.max(0, Math.min(seconds, 600)))
+  if (!s) return
+  const device = (getDb().prepare("SELECT value FROM sync_meta WHERE key = 'device_id'").get() as { value: string } | undefined)?.value ?? 'local'
+  getDb()
+    .prepare('INSERT INTO study_time (day, device, seconds) VALUES (?, ?, ?) ON CONFLICT (day, device) DO UPDATE SET seconds = seconds + excluded.seconds')
+    .run(localDay(at), device, s)
+}
+
+/** Everything the home page shows about your studying. */
+export function homeStats(now = new Date()): HomeStats {
+  const d = getDb()
+  const today = localDay(now)
+  const dayOffset = (n: number) => {
+    const x = new Date(now)
+    x.setHours(12, 0, 0, 0)
+    x.setDate(x.getDate() - n)
+    return localDay(x)
+  }
+  const perDay = new Map((d.prepare('SELECT day, SUM(seconds) s FROM study_time GROUP BY day').all() as { day: string; s: number }[]).map((r) => [r.day, r.s]))
+  const sumSince = (from: string) => [...perDay].reduce((n, [day, s]) => (day >= from && day <= today ? n + s : n), 0)
+  const total = [...perDay.values()].reduce((n, s) => n + s, 0)
+  const studiedDays = [...perDay.values()].filter((s) => s > 0).length
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const date = dayOffset(6 - i)
+    return { date, seconds: perDay.get(date) ?? 0 }
+  })
+  let bestDay: HomeStats['bestDay'] = null
+  for (const [date, seconds] of perDay) if (seconds > 0 && (!bestDay || seconds > bestDay.seconds)) bestDay = { date, seconds }
+
+  // Reviews by local day, for the streak and today's/this week's counts.
+  const reviewDays = new Map<string, number>()
+  for (const r of d.prepare('SELECT at FROM review_log WHERE at >= ?').all(new Date(now.getTime() - 400 * 86_400_000).toISOString()) as { at: string }[]) {
+    const k = localDay(new Date(r.at))
+    reviewDays.set(k, (reviewDays.get(k) ?? 0) + 1)
+  }
+  const active = (day: string) => (perDay.get(day) ?? 0) >= 60 || (reviewDays.get(day) ?? 0) > 0
+  let streak = 0
+  let back = active(today) ? 0 : 1
+  while (active(dayOffset(back))) {
+    streak++
+    back++
+  }
+  const weekStart = dayOffset(6)
+  const reviewedWeek = [...reviewDays].reduce((n, [day, c]) => (day >= weekStart ? n + c : n), 0)
+  const totalReviews = (d.prepare('SELECT COUNT(*) n FROM review_log').get() as { n: number }).n
+  // Retention: share of the last 30 days' reviews you didn't rate "again".
+  const recent = d.prepare('SELECT COUNT(*) n, SUM(CASE WHEN rating > 1 THEN 1 ELSE 0 END) ok FROM review_log WHERE at >= ?').get(new Date(now.getTime() - 30 * 86_400_000).toISOString()) as { n: number; ok: number | null }
+  const known = (d.prepare('SELECT COUNT(*) n FROM review_state WHERE interval >= 21').get() as { n: number }).n
+
+  const topicRows = d.prepare('SELECT status, progress FROM topics').all() as { status: string; progress: string }[]
+  const topics = { done: 0, total: topicRows.length, written: 0, answered: 0, correct: 0, tests: 0, testAverage: null as number | null }
+  let testSum = 0
+  for (const t of topicRows) {
+    let p: { done?: boolean; answered?: number; correct?: number; checkScore?: number | null; checkTotal?: number | null } = {}
+    try {
+      p = JSON.parse(t.progress || '{}')
+    } catch {
+      /* ignore */
+    }
+    if (t.status === 'ready') topics.written++
+    if (p.done) topics.done++
+    topics.answered += p.answered ?? 0
+    topics.correct += p.correct ?? 0
+    if (p.checkTotal) {
+      topics.tests++
+      testSum += (p.checkScore ?? 0) / p.checkTotal
+    }
+  }
+  if (topics.tests) topics.testAverage = testSum / topics.tests
+  topics.correct = Math.round(topics.correct * 10) / 10
+
+  return {
+    time: { today: perDay.get(today) ?? 0, week: sumSince(weekStart), month: sumSince(dayOffset(29)), total, dailyAverage: studiedDays ? Math.round(total / studiedDays) : 0 },
+    days,
+    streak,
+    bestDay,
+    cards: { reviewedToday: reviewDays.get(today) ?? 0, reviewedWeek, total: totalReviews, known, retention: recent.n ? (recent.ok ?? 0) / recent.n : null },
+    topics,
+    courses: (d.prepare('SELECT COUNT(*) n FROM courses').get() as { n: number }).n
+  }
 }

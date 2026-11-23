@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff, CalendarDays, Scissors } from 'lucide-react'
+import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff, CalendarDays, Scissors, StickyNote } from 'lucide-react'
+import { offerPlan, writeTopics } from '../lib/courseFlows'
 import { importSharedWeek } from '../lib/weekShare'
 import { TrimCardsModal } from '../components/TrimCards'
 import { examPhase, revisionMaxGapDays, type CourseFull, type WeekFull } from '@shared/course'
@@ -22,6 +23,7 @@ export function CoursePage({ id }: { id: string }) {
   const [aiDeck, setAiDeck] = useState<Deck | null>(null)
   const [trimAll, setTrimAll] = useState(false)
   const [examOpen, setExamOpen] = useState(false)
+  const [noteOpen, setNoteOpen] = useState(false)
   const load = () =>
     api.courses
       .get({ id })
@@ -38,13 +40,8 @@ export function CoursePage({ id }: { id: string }) {
   if (!c) return null
 
   const topics = c.weeks.flatMap((w) => w.topics)
-  const write = async (topicIds: string[]) => {
-    try {
-      await api.courses.write({ topicIds })
-      void load()
-    } catch (e) {
-      toast(errorText(e), 'bad')
-    }
+  const write = async (list: typeof topics) => {
+    if (await writeTopics(list)) void load()
   }
   const rename = async () => {
     const name = await askText('Rename course', { initial: c.name, confirmText: 'Rename' })
@@ -86,7 +83,7 @@ export function CoursePage({ id }: { id: string }) {
               </Button>
             )}
             {unwritten.length > 0 && (
-              <Button variant={next ? 'outline' : 'primary'} onClick={() => write(unwritten.map((t) => t.id))}>
+              <Button variant={next ? 'outline' : 'primary'} onClick={() => write(unwritten)}>
                 <Sparkles className="size-4" /> Write {unwritten.length} topic{unwritten.length === 1 ? '' : 's'}
               </Button>
             )}
@@ -118,6 +115,9 @@ export function CoursePage({ id }: { id: string }) {
                       Trim recall cards (whole course)…
                     </MenuItem>
                   )}
+                  <MenuItem icon={<StickyNote className="size-4" />} onClick={() => (close(), setNoteOpen(true))}>
+                    {c.note ? 'Edit note for the AI…' : 'Add a note for the AI…'}
+                  </MenuItem>
                   <MenuItem icon={<SlidersHorizontal className="size-4" />} onClick={() => (close(), void openAiSettings())}>
                     Models &amp; instructions
                   </MenuItem>
@@ -146,6 +146,8 @@ export function CoursePage({ id }: { id: string }) {
       </PageTitle>
 
       {topics.length > 0 && <ProgressBar value={done / topics.length} className="mb-8" />}
+
+      <CourseNote note={c.note} onEdit={() => setNoteOpen(true)} />
 
       {c.weeks.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
@@ -187,6 +189,17 @@ export function CoursePage({ id }: { id: string }) {
         />
       )}
 
+      {noteOpen && (
+        <CourseNoteModal
+          courseId={c.id}
+          note={c.note}
+          onClose={(changed) => {
+            setNoteOpen(false)
+            if (changed) void load()
+          }}
+        />
+      )}
+
       {adding && (
         <AddWeekModal
           courseId={c.id}
@@ -199,6 +212,85 @@ export function CoursePage({ id }: { id: string }) {
         />
       )}
     </Shell>
+  )
+}
+
+/** The course's note to the AI, shown on the course page so you know what every prompt is told. */
+function CourseNote({ note, onEdit }: { note: string; onEdit: () => void }) {
+  if (!note)
+    return (
+      <button
+        onClick={onEdit}
+        className="mb-6 flex w-full items-center gap-3 rounded-xl border border-dashed border-line px-4 py-3 text-left text-[0.9rem] text-muted transition-colors hover:border-accent hover:text-ink"
+      >
+        <StickyNote className="size-4 shrink-0" />
+        <span>
+          <span className="font-semibold text-ink">Add a note for the AI.</span> It goes into every prompt for this course, e.g. “This course is coding heavy and in C, so teach the theory and the coding together.”
+        </span>
+      </button>
+    )
+  return (
+    <div className="mb-6 flex items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3">
+      <StickyNote className="mt-0.5 size-4 shrink-0 text-accent" />
+      <div className="min-w-0 flex-1">
+        <div className="text-[0.78rem] font-semibold text-muted">Note for the AI · added to every prompt for this course</div>
+        <p className="whitespace-pre-wrap text-[0.95rem]">{note}</p>
+      </div>
+      <Button size="sm" variant="ghost" onClick={onEdit}>
+        <Pencil className="size-4" /> Edit
+      </Button>
+    </div>
+  )
+}
+
+function CourseNoteModal({ courseId, note, onClose }: { courseId: string; note: string; onClose: (changed: boolean) => void }) {
+  const [value, setValue] = useState(note)
+  const [busy, setBusy] = useState(false)
+  const save = async (v: string) => {
+    setBusy(true)
+    try {
+      await api.courses.setNote({ courseId, note: v })
+      toast(v.trim() ? 'Saved. Every prompt for this course now includes your note.' : 'Note removed.', 'good')
+      onClose(true)
+    } catch (e) {
+      toast(errorText(e), 'bad')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal
+      open
+      onClose={() => onClose(false)}
+      title="Note for the AI"
+      footer={
+        <>
+          {note && (
+            <Button variant="ghost" onClick={() => void save('')}>
+              Remove
+            </Button>
+          )}
+          <Button variant="ghost" onClick={() => onClose(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" loading={busy} onClick={() => void save(value)}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <p className="mb-3 text-[0.92rem] text-muted">
+        This is added automatically to everything the AI does for this course: planning weeks, writing topics, marking your answers, trimming cards and explaining its cards. Use it for what the AI should always know about the course.
+      </p>
+      <Textarea
+        rows={4}
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="e.g. This course is coding heavy and in C, so tailor the notes towards learning the theory and the coding at the same time."
+      />
+      <p className="mt-2 text-[0.82rem] text-muted">It applies to new AI calls. Topics already written stay as they are until you write them again.</p>
+    </Modal>
   )
 }
 
@@ -328,13 +420,14 @@ function WeekRow({ c, w }: { c: CourseFull; w: WeekFull }) {
 function AddWeekModal({ courseId, defaultLabel, onClose, onDone }: { courseId: string; defaultLabel: string; onClose: () => void; onDone: () => void }) {
   const [label, setLabel] = useState(defaultLabel)
   const [files, setFiles] = useState<string[]>([])
-  const [instructions, setInstructions] = useState('')
   const [busy, setBusy] = useState(false)
   const create = async () => {
     setBusy(true)
     try {
-      await api.courses.addWeek({ courseId, label: label.trim(), files, instructions })
+      const w = await api.courses.addWeek({ courseId, label: label.trim(), files })
       onDone()
+      // Files are added, not planned: ask first.
+      if (files.length) await offerPlan(w, { added: files.length })
     } catch (e) {
       toast(errorText(e), 'bad')
     } finally {
@@ -352,7 +445,7 @@ function AddWeekModal({ courseId, defaultLabel, onClose, onDone }: { courseId: s
             Cancel
           </Button>
           <Button variant="primary" loading={busy} onClick={create}>
-            {files.length ? 'Add and plan topics' : 'Add week'}
+            Add week
           </Button>
         </>
       }
@@ -361,11 +454,8 @@ function AddWeekModal({ courseId, defaultLabel, onClose, onDone }: { courseId: s
         <Field label="Name">
           <Input autoFocus value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Week 3, Reading week, Revision…" />
         </Field>
-        <Field label="Files" hint="This week’s slides, lecture transcripts and readings. Claude plans its topics from these, knowing what earlier weeks already covered.">
+        <Field label="Files" hint="This week’s slides, lecture transcripts and readings. Once they’re added you’re asked whether to plan the week’s topics now.">
           <FileDrop list={files} setList={setFiles} />
-        </Field>
-        <Field label="Anything else? (optional)" hint="e.g. “The second lecture was a guest talk, skip it”.">
-          <Textarea rows={2} value={instructions} onChange={(e) => setInstructions(e.target.value)} />
         </Field>
       </div>
     </Modal>

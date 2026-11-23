@@ -28,14 +28,15 @@ import {
   Upload,
   X
 } from 'lucide-react'
-import type { CourseFile, CourseFull, Topic, WeekFull } from '@shared/course'
+import { NOTE_LEVEL_INFO, type CourseFile, type CourseFull, type Topic, type WeekFull } from '@shared/course'
+import { offerPlan, switchLevel, writeTopics } from '../lib/courseFlows'
 import { planUsageText, type JobInfo } from '@shared/types'
 import { shareWeek } from '../lib/weekShare'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
 import { askText, confirmDialog } from '../lib/dialogs'
 import { Shell, PageTitle } from '../components/Shell'
-import { Button, Dots, Menu, MenuItem, Pill, ProgressBar, cx } from '../components/ui'
+import { Button, Dots, Menu, MenuItem, Pill, ProgressBar, Segmented, cx } from '../components/ui'
 import { TrimCardsModal } from '../components/TrimCards'
 import { JobLive } from '../components/JobLive'
 import { IS_MOBILE } from '../lib/platform'
@@ -102,30 +103,22 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
   }
   const minutes = w.topics.reduce((n, t) => n + (t.plan.minutes || 0), 0)
 
-  const write = async (topicIds: string[]) => {
-    try {
-      await api.courses.write({ topicIds })
-      reload()
-    } catch (e) {
-      toast(errorText(e), 'bad')
-    }
+  // Pick the level(s) of detail first; every level written is kept.
+  const write = async (topics: Topic[]) => {
+    if (await writeTopics(topics)) reload()
   }
+  // Planning always asks first, with room for instructions that take priority.
   const plan = async () => {
-    const written = w.topics.filter((t) => t.status === 'ready').length
-    if (written && !(await confirmDialog(`Plan ${w.label} again?`, `This replaces its ${w.topics.length} topics, including ${written} you’ve already written. Recall cards you’ve made stay in the deck.`, { confirmText: 'Re-plan', danger: true }))) return
-    try {
-      await api.courses.plan({ weekId: w.id })
-      reload()
-    } catch (e) {
-      toast(errorText(e), 'bad')
-    }
+    if (await offerPlan(w)) reload()
   }
   const addFiles = async () => {
     const files = await api.app.pickFiles({ kind: 'course' })
     if (!files.length) return
-    await api.courses.addFiles({ weekId: w.id, files })
+    const n = (await api.courses.addFiles({ weekId: w.id, files })).length - w.files.length
     reload()
-    if (w.topics.length) toast(`Added to ${w.label}. Plan it again to use the new files.`, 'info', { label: 'Plan again', run: () => void plan() })
+    if (n <= 0) return toast('None of those files can be added to a week.', 'bad')
+    // Adding files doesn't plan by itself: ask.
+    if (await offerPlan(w, { added: n })) reload()
   }
   const rename = async () => {
     const label = await askText('Rename week', { initial: w.label, confirmText: 'Rename' })
@@ -171,7 +164,7 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
               </Button>
             )}
             {!planning && unwritten.length > 0 && (
-              <Button variant={nextUp ? 'outline' : 'primary'} onClick={() => write(unwritten.map((t) => t.id))}>
+              <Button variant={nextUp ? 'outline' : 'primary'} onClick={() => write(unwritten)}>
                 <Sparkles className="size-4" /> Write {unwritten.length === w.topics.length ? `all ${unwritten.length}` : `${unwritten.length} more`}
               </Button>
             )}
@@ -408,7 +401,7 @@ function FileRow({ f, canRemove, reload }: { f: CourseFile; canRemove: boolean; 
   )
 }
 
-function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (ids: string[]) => void; saveNote: (t: Topic) => void; reload: () => void; onTrim: () => void }) {
+function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (topics: Topic[]) => void; saveNote: (t: Topic) => void; reload: () => void; onTrim: () => void }) {
   const go = useStore((s) => s.go)
   const jobs = useStore((s) => s.jobs)
   const job = runningJob(jobs, 'course_topic', 'topicId', t.id)
@@ -436,7 +429,7 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (id
               <Sparkles className="size-3.5" /> Writing…
             </div>
           )}
-          {t.status === 'error' && !writing && <div className="mt-1 text-[0.85rem] text-bad">{t.error}</div>}
+          {t.error && !writing && <div className="mt-1 text-[0.85rem] text-bad">{t.status === 'ready' ? `Last write didn’t finish: ${t.error}` : t.error}</div>}
         </button>
         <div className="ml-auto flex shrink-0 items-center gap-2 text-[0.85rem] text-muted">
           {t.plan.minutes > 0 && (
@@ -485,11 +478,23 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (id
                         Trim its recall cards…
                       </MenuItem>
                     )}
+                    <MenuItem icon={<Layers className="size-4" />} onClick={() => (close(), write([t]))}>
+                      Write at another level…
+                    </MenuItem>
                     <MenuItem
                       icon={<RefreshCw className="size-4" />}
                       onClick={async () => {
                         close()
-                        if (await confirmDialog('Write this topic again?', 'You get new notes and questions, and its recall cards are replaced (with their review history).', { confirmText: 'Rewrite', danger: true })) write([t.id])
+                        const lvl = NOTE_LEVEL_INFO[t.level].label.toLowerCase()
+                        const note = t.levels.length > 1 ? `Only the ${lvl} notes are replaced; your other levels and the recall cards stay.` : 'You get new notes and questions, and its recall cards are replaced (with their review history).'
+                        if (await confirmDialog(`Write the ${lvl} notes again?`, note, { confirmText: 'Rewrite', danger: true })) {
+                          try {
+                            await api.courses.write({ topicIds: [t.id], levels: [t.level] })
+                            reload()
+                          } catch (e) {
+                            toast(errorText(e), 'bad')
+                          }
+                        }
                       }}
                     >
                       Write again
@@ -500,7 +505,7 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (id
             </>
           ) : (
             !writing && (
-              <Button size="sm" variant="soft" onClick={() => write([t.id])}>
+              <Button size="sm" variant="soft" onClick={() => write([t])}>
                 <Sparkles className="size-4" /> {t.status === 'error' ? 'Try again' : 'Write'}
               </Button>
             )
@@ -511,6 +516,20 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (id
             </Button>
           )}
         </div>
+        {ready && !writing && (t.levels.length > 1 || t.level !== 'standard') && (
+          <div className="flex basis-full flex-wrap items-center gap-2 sm:pl-13">
+            <span className="text-[0.8rem] text-muted">Notes:</span>
+            {t.levels.length > 1 ? (
+              <Segmented
+                value={t.level}
+                onChange={(l) => void switchLevel(t, l).then((x) => x && reload())}
+                options={t.levels.map((l) => ({ value: l, label: NOTE_LEVEL_INFO[l].label }))}
+              />
+            ) : (
+              <Pill tone="accent">{NOTE_LEVEL_INFO[t.level].label}</Pill>
+            )}
+          </div>
+        )}
         {job && (
           <div className="basis-full pl-13">
             <JobLive job={job} />
