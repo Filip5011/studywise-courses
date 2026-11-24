@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft, ChevronDown, ChevronRight, Download, FileText, Search, Store, Trash2, Upload, Users } from 'lucide-react'
-import { modelLabel, type MarketCourse, type MarketCourseFull, type MarketSort, type MarketWeek } from '@shared/market'
+import { authorsText, modelLabel, type MarketCourse, type MarketCourseFull, type MarketSort, type MarketWeek } from '@shared/market'
 import { NOTE_LEVEL_INFO, isNoteLevel } from '@shared/course'
 import { api, errorText } from '../lib/api'
 import { addMarketWeek, modelsText, publishAllToMarket, weekSummary } from '../lib/market'
@@ -124,8 +124,8 @@ function MarketList() {
                   {c.module && c.module !== c.name && <div className="text-[0.85rem] text-muted">{c.module}</div>}
                 </div>
                 <div className="flex items-center gap-1.5 text-[0.85rem] text-muted">
-                  <Users className="size-3.5" /> {c.author}
-                  {c.mine && ' (you)'}
+                  <Users className="size-3.5" /> {authorsText(c.authors)}
+                  {c.mine && <Pill tone="accent">Has your weeks</Pill>}
                 </div>
                 <div className="text-[0.88rem] text-muted">
                   {plural(c.weekCount, 'week')} · {plural(c.topicCount, 'topic')} · {plural(c.cardCount, 'flashcard')}
@@ -176,8 +176,7 @@ function MarketCoursePage({ id }: { id: string }) {
     <Shell>
       <PageTitle eyebrow={back} title={c.name}>
         <span>
-          By {c.author}
-          {c.mine && ' (you)'}
+          Weeks by {authorsText(c.authors)}
           {c.module && c.module !== c.name ? ` · ${c.module}` : ''}
           {c.level ? ` · for ${c.level}` : ''} · {plural(c.weekCount, 'week')} · {plural(c.topicCount, 'topic')} · {plural(c.downloads, 'download')}
         </span>
@@ -216,7 +215,13 @@ function WeekRow({ w, onRemoved }: { w: MarketWeek; onRemoved: () => void }) {
         <button className="flex min-w-0 flex-1 items-start gap-2 text-left" onClick={() => setOpen(!open)} aria-expanded={open}>
           {open ? <ChevronDown className="mt-1 size-4 shrink-0 text-muted" /> : <ChevronRight className="mt-1 size-4 shrink-0 text-muted" />}
           <div className="min-w-0">
-            <div className="font-semibold">{w.label}</div>
+            <div className="font-semibold">
+              {w.label}
+              <span className="ml-2 text-[0.86rem] font-normal text-muted">
+                by {w.author}
+                {w.mine && ' (you)'}
+              </span>
+            </div>
             <div className="text-[0.86rem] text-muted">
               {weekSummary(w)} · {mb(w.size)} · {plural(w.downloads, 'download')}
             </div>

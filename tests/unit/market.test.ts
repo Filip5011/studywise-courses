@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import JSZip from 'jszip'
 import { signature, similarity, words, SIGNATURE_SIZE } from '@shared/fingerprint'
-import { modelLabel } from '@shared/market'
+import { authorsText, modelLabel } from '@shared/market'
 
 const lecture = (topic: string, n: number) =>
   Array.from({ length: n }, (_, i) => `In ${topic} the ${i}th idea builds on the one before it, and the lecture works an example through step by step.`).join(' ')
@@ -30,6 +30,13 @@ describe('week fingerprints', () => {
 
   it('ignores accents and punctuation', () => {
     expect(words('Café, naïve—résumé! [page 3] x')).toEqual(['cafe', 'naive', 'resume'])
+  })
+
+  it('names who published a course', () => {
+    expect(authorsText(['alex'])).toBe('alex')
+    expect(authorsText(['alex', 'sam'])).toBe('alex and sam')
+    expect(authorsText(['alex', 'sam', 'kim'])).toBe('alex, sam and kim')
+    expect(authorsText(['alex', 'sam', 'kim', 'lee', 'pat'])).toBe('alex, sam and 3 others')
   })
 
   it('labels models', () => {

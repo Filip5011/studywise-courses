@@ -57,7 +57,7 @@ export function MarketMatchesHost() {
                     {m.course.name} · {m.week.label}
                   </div>
                   <div className="flex items-center gap-1.5 text-[0.85rem] text-muted">
-                    <Users className="size-3.5" /> {m.course.author}
+                    <Users className="size-3.5" /> {m.week.author}
                     {m.week.mine && ' (you)'} · {m.week.downloads} download{m.week.downloads === 1 ? '' : 's'}
                   </div>
                 </div>
