@@ -237,9 +237,12 @@ function WeekRow({ w, onRemoved }: { w: MarketWeek; onRemoved: () => void }) {
             <Trash2 className="size-4" /> Take down
           </Button>
         )}
-        <Button variant="primary" size="sm" loading={busy} onClick={add}>
-          <Download className="size-4" /> Add to my courses
-        </Button>
+        {/* Yours came from your own courses: adding it would only make a second copy. */}
+        {!w.mine && (
+          <Button variant="primary" size="sm" loading={busy} onClick={add}>
+            <Download className="size-4" /> Add to my courses
+          </Button>
+        )}
       </div>
       {open && (
         <div className="flex flex-col gap-3 border-t border-line px-4 py-4">

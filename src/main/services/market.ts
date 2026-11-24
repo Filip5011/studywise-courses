@@ -210,8 +210,8 @@ export async function similar(weekId: string): Promise<MarketMatch[]> {
     if (!fp.sig && !fp.hashes.length) return []
     const own = published()[weekId]
     const r = await request<{ matches: MarketMatch[] }>('/api/similar', { ...json(fp), timeoutMs: SIMILAR_TIMEOUT_MS })
-    // Your own published copy of this very week isn't a warning.
-    return r.matches.filter((m) => m.week.id !== own)
+    // Only other people's weeks: your own published ones came from your courses already.
+    return r.matches.filter((m) => m.week.id !== own && !m.week.mine)
   } catch {
     return []
   }
