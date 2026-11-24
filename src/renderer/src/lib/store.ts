@@ -21,6 +21,8 @@ export type Route =
    * test: take the topic's test (its check questions) instead of learning it.
    */
   | { name: 'topic'; id: string; section?: number; test?: boolean }
+  /** The course marketplace; with courseId, one course's weeks. */
+  | { name: 'market'; courseId?: string }
 
 export interface Toast {
   id: number

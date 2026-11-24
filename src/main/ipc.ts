@@ -19,6 +19,7 @@ import * as updates from './updater'
 import * as explain from './services/explain'
 import * as course from './services/course'
 import * as weekShare from './services/weekShare'
+import * as market from './services/market'
 import { CourseQuestion, NOTE_LEVELS } from '@shared/course'
 import * as io from './importexport'
 import { backupLibrary, restoreLibrary } from './backup'
@@ -481,6 +482,25 @@ export const handlers = {
     setExamDate: h(z.object({ courseId: id, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable() }), (i) => course.setExamDate(i.courseId, i.date))
   },
 
+  /** The course marketplace (a separate site): browse, publish, add, and the "already made" check. */
+  market: {
+    status: h(none, () => market.marketStatus()),
+    configure: h(z.object({ url: z.string().max(500), key: z.string().max(500).nullable().optional() }), (i) => market.configure(i)),
+    disconnect: h(none, () => market.disconnect()),
+    test: h(none, () => market.test()),
+    courses: h(z.object({ q: z.string().max(200).optional(), sort: z.enum(['recent', 'popular']).optional() }).optional(), (i) => market.listCourses(i ?? {})),
+    course: h(z.object({ id }), (i) => market.getCourse(i.id)),
+    mine: h(none, () => market.mine()),
+    published: h(none, () => market.publishedWeeks()),
+    publish: h(z.object({ weekId: id }), (i) => market.publish(i.weekId)),
+    remove: h(z.object({ id }), (i) => market.remove(i.id)),
+    /** Download a published week; returns a .studyweek file to preview and import. */
+    download: h(z.object({ id }), async (i) => {
+      const file = await market.download(i.id)
+      return { file, ...(await weekShare.previewWeek(file)) }
+    }),
+    similar: h(z.object({ weekId: id }), (i) => market.similar(i.weekId))
+  },
   stats: {
     /** Time studied, topics and card stats for the home page. */
     home: h(none, () => repo.homeStats()),

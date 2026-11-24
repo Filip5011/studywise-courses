@@ -2,6 +2,8 @@ import { NOTE_LEVEL_INFO, type NoteLevel, type Topic } from '@shared/course'
 import { api, errorText } from './api'
 import { askPlan, askWrite } from './dialogs'
 import { toast, useStore } from './store'
+import { askAboutMatches } from '../components/MarketMatches'
+import { useMarketWeekHere } from './market'
 
 const files = (n: number) => `${n} file${n === 1 ? '' : 's'}`
 
@@ -12,6 +14,15 @@ const files = (n: number) => `${n} file${n === 1 ? '' : 's'}`
  */
 export async function offerPlan(week: { id: string; label: string; topics?: { status: string }[] }, opts: { added?: number } = {}): Promise<boolean> {
   const topics = week.topics?.length ?? 0
+  // Before spending tokens on a new week: has someone published one made from the same slides?
+  if (!topics) {
+    const matches = await api.market.similar({ weekId: week.id }).catch(() => [])
+    if (matches.length) {
+      const a = await askAboutMatches(week.label, matches)
+      if (a === null) return false
+      if (a !== 'plan') return useMarketWeekHere(a.use, week)
+    }
+  }
   const written = week.topics?.filter((t) => t.status === 'ready').length ?? 0
   const message = [
     opts.added ? `Added ${files(opts.added)} to ${week.label}.` : '',

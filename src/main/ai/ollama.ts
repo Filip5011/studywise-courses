@@ -18,10 +18,11 @@ import { readFileSync } from 'node:fs'
 import type { AiLiveEvent, CliResult } from './cli'
 import { CliError } from './cli'
 import { getSetting, setSetting } from '../db/repo'
+import { getSecret, hasStoredSecret, setSecret } from '../secrets'
 import type { OllamaModel, OllamaStatus } from '@shared/types'
 
 export const OLLAMA_CLOUD_URL = 'https://ollama.com'
-const KEY_SETTING = 'secret.ollamaKey'
+const KEY_SETTING = 'secret.ollamaKey' as const
 
 // ---------------------------------------------------------------------------
 // Config and API key
@@ -39,37 +40,13 @@ export function isCloudUrl(url = ollamaBaseUrl()): boolean {
   }
 }
 
-type SafeStorage = { isEncryptionAvailable(): boolean; encryptString(s: string): Buffer; decryptString(b: Buffer): string }
-function safeStorage(): SafeStorage | null {
-  try {
-    // Not available when running as plain Node (unit tests).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const s = (require('electron') as { safeStorage?: SafeStorage }).safeStorage
-    return s && s.isEncryptionAvailable() ? s : null
-  } catch {
-    return null
-  }
-}
-
 /** The key is encrypted with the OS keychain (DPAPI on Windows) when possible. */
 export function setOllamaKey(key: string | null): void {
-  const k = key?.trim()
-  if (!k) return setSetting(KEY_SETTING, null)
-  const ss = safeStorage()
-  setSetting(KEY_SETTING, ss ? { enc: ss.encryptString(k).toString('base64') } : { plain: k })
+  setSecret(KEY_SETTING, key)
 }
 
 export function getOllamaKey(): string | null {
-  const v = getSetting<{ enc?: string; plain?: string } | null>(KEY_SETTING, null)
-  if (v?.enc) {
-    try {
-      return safeStorage()?.decryptString(Buffer.from(v.enc, 'base64')) ?? null
-    } catch {
-      return null // encrypted on another computer (restored backup)
-    }
-  }
-  if (v?.plain) return v.plain
-  return process.env.OLLAMA_API_KEY?.trim() || null
+  return getSecret(KEY_SETTING) ?? (hasStoredSecret(KEY_SETTING) ? null : process.env.OLLAMA_API_KEY?.trim() || null)
 }
 
 export function ollamaStatus(): OllamaStatus {

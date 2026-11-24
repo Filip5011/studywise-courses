@@ -28,7 +28,8 @@ import {
   Info,
   Archive,
   Smartphone,
-  Laptop
+  Laptop,
+  Store
 } from 'lucide-react'
 import type { Preset, PresetVersion, CustomAction, ModelChoice, AiCall, Thresholds, AiProvider, OllamaModel } from '@shared/types'
 import { ACTION_PLACEMENTS, DEFAULT_THRESHOLDS } from '@shared/types'
@@ -44,6 +45,7 @@ import { Markdown } from '../components/Markdown'
 import { UsageBars } from '../components/UsageMeter'
 import { OllamaModelOptions, useOllamaModels } from '../components/OllamaModels'
 import { DesktopPhoneTab, MobileSyncTab } from '../components/PhoneSync'
+import { MarketSetup } from '../components/MarketSetup'
 import { IS_MOBILE, mobile } from '../lib/platform'
 
 const DESKTOP_TABS = [
@@ -54,6 +56,7 @@ const DESKTOP_TABS = [
   { id: 'actions', label: 'Custom actions', icon: Wand2 },
   { id: 'usage', label: 'AI usage', icon: Activity },
   { id: 'phone', label: 'Phone', icon: Smartphone },
+  { id: 'market', label: 'Marketplace', icon: Store },
   { id: 'jobs', label: 'Jobs', icon: ListChecks }
 ] as const
 // On the phone, AI is set up on the computer; what's left is the phone's own settings and syncing.
@@ -104,6 +107,11 @@ export function Settings({ tab = 'general' }: { tab?: string }) {
         {cur === 'actions' && <ActionsTab />}
         {cur === 'usage' && <UsageTab />}
         {cur === 'phone' && <DesktopPhoneTab />}
+        {cur === 'market' && (
+          <div className="max-w-2xl">
+            <MarketSetup />
+          </div>
+        )}
         {cur === 'sync' && <MobileSyncTab />}
         {cur === 'jobs' && <Jobs embedded />}
       </div>

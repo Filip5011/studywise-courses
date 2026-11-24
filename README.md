@@ -6,6 +6,8 @@ Make a course for a module, then add each week's slides, transcripts and reading
 
 It also keeps everything from Studywise: give it a lecture PDF and it makes notes and flashcards, then quizzes you and marks your answers.
 
+Weeks you've made can be published to a course marketplace ([studywise-server](https://github.com/SnakeLuck360GT/studywise-server), self-hostable with Docker), where other people browse them and add them without generating anything. Before you plan a week, Studywise checks whether someone has already published one made from the same slides.
+
 It uses Claude Code on your computer (you need a Claude account), or Ollama: its cloud models with an API key, or models on your own Ollama server. You can import Anki decks (`.apkg`) and study them like any other deck.
 
 ![Studywise](docs/screenshots/home.png)

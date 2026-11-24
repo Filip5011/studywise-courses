@@ -27,6 +27,8 @@ import { Flashcards } from './pages/Flashcards'
 import { Notes } from './pages/Notes'
 import { Jobs } from './pages/Jobs'
 import { Courses, NewCourseModal } from './pages/Courses'
+import { Market } from './pages/Market'
+import { MarketMatchesHost } from './components/MarketMatches'
 import { JobDock } from './components/JobLive'
 import { CoursePage } from './pages/Course'
 import { WeekPage } from './pages/Week'
@@ -391,6 +393,7 @@ export function App() {
       <CommandPalette />
       <ShortcutSheet />
       <DialogHost />
+      <MarketMatchesHost />
       <DropChooser />
       <Toasts />
       {onboarding && (IS_MOBILE ? <MobileOnboarding onDone={() => setOnboarding(false)} /> : <Onboarding onDone={() => setOnboarding(false)} />)}
@@ -436,6 +439,8 @@ function Page({ route }: { route: Route }) {
       return <Jobs />
     case 'courses':
       return <Courses />
+    case 'market':
+      return <Market key={route.courseId ?? ''} courseId={route.courseId} />
     case 'course':
       return <CoursePage id={route.id} />
     case 'week':

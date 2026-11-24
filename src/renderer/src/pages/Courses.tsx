@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { GraduationCap, Plus, FileText, X, Upload, Download } from 'lucide-react'
+import { GraduationCap, Plus, FileText, X, Upload, Download, Store } from 'lucide-react'
 import { importSharedWeek } from '../lib/weekShare'
 import { IS_MOBILE } from '../lib/platform'
 import type { CourseSummary } from '@shared/course'
@@ -22,6 +22,9 @@ export function Courses() {
         title="Courses"
         actions={
           <>
+            <Button className="desktop-only" onClick={() => go({ name: 'market' })} title="Courses other people have made">
+              <Store className="size-4" /> Marketplace
+            </Button>
             <Button className="desktop-only" onClick={() => void importSharedWeek()} title="Add a week a friend shared with you (.studyweek)">
               <Download className="size-4" /> Add a shared week
             </Button>

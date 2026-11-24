@@ -11,7 +11,7 @@ import { UsageMeter } from './UsageMeter'
 
 const LINKS: { label: string; route: Route; match: Route['name'][]; key: string }[] = [
   { label: 'Home', route: { name: 'home' }, match: ['home'], key: '⌘1' },
-  { label: 'Courses', route: { name: 'courses' }, match: ['courses', 'course', 'week', 'topic'], key: 'g c' },
+  { label: 'Courses', route: { name: 'courses' }, match: ['courses', 'course', 'week', 'topic', 'market'], key: 'g c' },
   { label: 'Decks', route: { name: 'decks' }, match: ['decks', 'deck', 'flashcards', 'learn'], key: '⌘2' },
   { label: 'Notes', route: { name: 'notes' }, match: ['notes'], key: '⌘3' },
   { label: 'Settings', route: { name: 'settings' }, match: ['settings'], key: '⌘,' }
