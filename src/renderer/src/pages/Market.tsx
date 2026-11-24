@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { ArrowLeft, ChevronDown, ChevronRight, Download, FileText, Search, Store, Trash2, Users } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronRight, Download, FileText, Search, Store, Trash2, Upload, Users } from 'lucide-react'
 import { modelLabel, type MarketCourse, type MarketCourseFull, type MarketSort, type MarketWeek } from '@shared/market'
 import { NOTE_LEVEL_INFO, isNoteLevel } from '@shared/course'
 import { api, errorText } from '../lib/api'
-import { addMarketWeek, modelsText, weekSummary } from '../lib/market'
+import { addMarketWeek, modelsText, publishAllToMarket, weekSummary } from '../lib/market'
 import { confirmDialog } from '../lib/dialogs'
 import { toast, useStore } from '../lib/store'
 import { Shell, PageTitle } from '../components/Shell'
@@ -26,7 +26,11 @@ function BackToCourses() {
 /** Courses other people have generated, and the weeks in each. */
 export function Market({ courseId }: { courseId?: string }) {
   const [ready, setReady] = useState<boolean | null>(null)
-  const check = () => void api.market.status().then((s) => setReady(!!s.url && s.hasKey))
+  const check = () =>
+    void api.market
+      .status()
+      .then((s) => setReady(!!s.url && s.hasKey))
+      .catch(() => setReady(false))
   useEffect(check, [])
   if (ready === null) return null
   if (!ready)
@@ -70,14 +74,19 @@ function MarketList() {
         eyebrow={<BackToCourses />}
         title="Marketplace"
         actions={
-          <Segmented
-            value={view}
-            onChange={setView}
-            options={[
-              { value: 'all', label: 'All courses' },
-              { value: 'mine', label: 'Published by you' }
-            ]}
-          />
+          <>
+            <Button onClick={() => void publishAllToMarket()} title="Publish every week you’ve written, from all your courses">
+              <Upload className="size-4" /> Publish all my courses
+            </Button>
+            <Segmented
+              value={view}
+              onChange={setView}
+              options={[
+                { value: 'all', label: 'All courses' },
+                { value: 'mine', label: 'Published by you' }
+              ]}
+            />
+          </>
         }
       >
         Courses other people have made in Studywise, and which model wrote them. Add a week to one of your courses: nothing is generated, so it costs no tokens. To publish one of yours, open the week and use its ⋯ menu.
@@ -278,7 +287,10 @@ function MyWeeks() {
   if (!weeks.length)
     return (
       <Empty icon={<Store className="size-8" />} title="You haven’t published anything">
-        Open a week you’ve written and choose Publish to marketplace from its ⋯ menu.
+        <p className="mb-4">Publish every course you’ve made at once, or one week at a time from a week’s ⋯ menu.</p>
+        <Button variant="primary" onClick={() => void publishAllToMarket()}>
+          <Upload className="size-4" /> Publish all my courses
+        </Button>
       </Empty>
     )
   return (

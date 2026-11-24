@@ -493,6 +493,15 @@ export const handlers = {
     mine: h(none, () => market.mine()),
     published: h(none, () => market.publishedWeeks()),
     publish: h(z.object({ weekId: id }), (i) => market.publish(i.weekId)),
+    /** Weeks that can be published: every course's, or one course's. */
+    publishable: h(z.object({ courseId: z.string().optional() }).optional(), (i) => market.publishableWeeks(i?.courseId)),
+    /** Publish all of them as a job (it can take a while with slides to upload). */
+    publishAll: h(z.object({ courseId: z.string().optional() }).optional(), (i) => {
+      const weeks = market.publishableWeeks(i?.courseId)
+      if (!weeks.length) throw new Error('There’s nothing to publish yet: write some topics first.')
+      const title = i?.courseId ? `Publish ${weeks[0].course}` : `Publish ${weeks.length} week${weeks.length === 1 ? '' : 's'}`
+      return startJob('other', title, (ctx) => market.publishMany(weeks, ctx))
+    }),
     remove: h(z.object({ id }), (i) => market.remove(i.id)),
     /** Download a published week; returns a .studyweek file to preview and import. */
     download: h(z.object({ id }), async (i) => {

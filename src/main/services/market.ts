@@ -11,6 +11,7 @@ import { getSecret, setSecret } from '../secrets'
 import { getDb } from '../db'
 import { weekFingerprint } from './course'
 import { weekZip } from './weekShare'
+import type { JobContext } from '../jobs'
 import type { MarketCourse, MarketCourseFull, MarketMatch, MarketSort, MarketStatus, MarketWeek } from '@shared/market'
 
 const URL_SETTING = 'market.url'
@@ -148,6 +149,38 @@ export async function publish(weekId: string): Promise<{ week: MarketWeek; repla
   }
   setSetting(PUBLISHED_SETTING, { ...published(), [weekId]: r.week.id })
   return { week: r.week, replaced }
+}
+
+/** Weeks with at least one written topic, in course and week order: everything that can be published (or just one course's). */
+export function publishableWeeks(courseId?: string): { weekId: string; course: string; label: string }[] {
+  return getDb()
+    .prepare(
+      `SELECT w.id weekId, c.name course, w.label label FROM weeks w JOIN courses c ON c.id = w.course_id
+       WHERE EXISTS (SELECT 1 FROM topics t WHERE t.week_id = w.id AND t.status = 'ready') ${courseId ? 'AND c.id = ?' : ''}
+       ORDER BY c.name COLLATE NOCASE, w.position`
+    )
+    .all(...(courseId ? [courseId] : [])) as { weekId: string; course: string; label: string }[]
+}
+
+/** Publish several weeks one after another. One failing doesn't stop the rest. */
+export async function publishMany(weeks: { weekId: string; course: string; label: string }[], ctx: JobContext): Promise<{ published: number; failed: string[] }> {
+  const failed: string[] = []
+  let published = 0
+  for (const [i, w] of weeks.entries()) {
+    if (ctx.signal.aborted) throw new Error('Cancelled')
+    const name = `${w.course} · ${w.label}`
+    ctx.progress(`Publishing ${i + 1} of ${weeks.length}: ${name}`)
+    ctx.live?.({ stage: `Publishing ${name}…`, percent: i / weeks.length })
+    try {
+      await publish(w.weekId)
+      published++
+    } catch (e) {
+      failed.push(`${name}: ${(e as Error).message}`)
+    }
+  }
+  if (!published && failed.length) throw new Error(failed[0])
+  ctx.progress(`Published ${published} week${published === 1 ? '' : 's'}${failed.length ? `; ${failed.length} didn’t go: ${failed.join('; ')}` : ''}`)
+  return { published, failed }
 }
 
 export async function remove(remoteWeekId: string): Promise<void> {

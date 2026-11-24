@@ -95,6 +95,8 @@ export const CHANNELS = [
   'market.mine',
   'market.published',
   'market.publish',
+  'market.publishable',
+  'market.publishAll',
   'market.remove',
   'market.download',
   'market.similar',

@@ -18,15 +18,22 @@ export function MarketSetup({ onConnected }: { onConnected?: () => void }) {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    void api.market.status().then((s) => {
-      setStatus(s)
-      setUrl(s.url)
-      if (s.url && s.hasKey)
-        api.market
-          .test()
-          .then((r) => setUser(r.user))
-          .catch((e) => setError(errorText(e)))
-    })
+    api.market
+      .status()
+      .then((s) => {
+        setStatus(s)
+        setUrl(s.url)
+        if (s.url && s.hasKey)
+          api.market
+            .test()
+            .then((r) => setUser(r.user))
+            .catch((e) => setError(errorText(e)))
+      })
+      // Shown rather than an empty card: usually the app needs a restart after an update.
+      .catch((e) => {
+        setStatus({ url: '', hasKey: false })
+        setError(`${errorText(e)} Quit Studywise and open it again.`)
+      })
   }, [])
 
   const connect = async () => {

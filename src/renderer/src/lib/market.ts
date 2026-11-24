@@ -62,4 +62,37 @@ export async function publishToMarket(week: { id: string; label: string }): Prom
   }
 }
 
+/**
+ * Publish every week you've written something in (or one course's), as a job.
+ * Weeks already on the marketplace are replaced with what you have now.
+ */
+export async function publishAllToMarket(courseId?: string): Promise<boolean> {
+  try {
+    const status = await api.market.status()
+    if (!status.url || !status.hasKey) {
+      toast('Connect to a marketplace first: add its address and your API key here.', 'info')
+      useStore.getState().go({ name: 'settings', tab: 'market' })
+      return false
+    }
+    const weeks = await api.market.publishable(courseId ? { courseId } : undefined)
+    if (!weeks.length) {
+      toast('There’s nothing to publish yet: write some topics first.', 'info')
+      return false
+    }
+    const courses = [...new Set(weeks.map((w) => w.course))]
+    const ok = await confirmDialog(
+      courseId ? `Publish ${courses[0]} to the marketplace?` : `Publish all your courses to the marketplace?`,
+      `${plural(weeks.length, 'week')}${courseId ? '' : ` from ${plural(courses.length, 'course')} (${courses.join(', ')})`}, with their topics, questions, flashcards, slides and transcripts. Everyone on ${new URL(status.url).host} can see and add them. Weeks you published before are replaced with what you have now. Only weeks with a written topic are included, and your progress isn’t. Only publish material you’re allowed to share.`,
+      { confirmText: `Publish ${plural(weeks.length, 'week')}` }
+    )
+    if (!ok) return false
+    await api.market.publishAll(courseId ? { courseId } : undefined)
+    toast(`Publishing ${plural(weeks.length, 'week')}. You can follow it in Jobs.`, 'info')
+    return true
+  } catch (e) {
+    toast(errorText(e), 'bad')
+    return false
+  }
+}
+
 export const matchPercent = (m: MarketMatch) => `${Math.round(m.score * 100)}%`
