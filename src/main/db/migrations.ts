@@ -266,6 +266,10 @@ export const MIGRATIONS: string[] = [
     PRIMARY KEY (day, device)
   );
   ${syncTriggersSql(SYNC_TABLES.filter((t) => t.since === 9))}
+  `,
+  /* 10: which model and effort planned each week and wrote each level of a topic (shown on the marketplace) */ `
+  ALTER TABLE weeks ADD COLUMN planned_with TEXT;
+  ALTER TABLE topics ADD COLUMN written_with TEXT NOT NULL DEFAULT '{}';
   `
 ]
 

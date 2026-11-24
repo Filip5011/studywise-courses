@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff, CalendarDays, Scissors, StickyNote } from 'lucide-react'
+import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff, CalendarDays, Scissors, StickyNote, Store } from 'lucide-react'
 import { offerPlan, writeTopics } from '../lib/courseFlows'
 import { importSharedWeek } from '../lib/weekShare'
+import { publishAllToMarket } from '../lib/market'
 import { TrimCardsModal } from '../components/TrimCards'
 import { examPhase, revisionMaxGapDays, type CourseFull, type WeekFull } from '@shared/course'
 import { useStore, toast } from '../lib/store'
@@ -107,6 +108,11 @@ export function CoursePage({ id }: { id: string }) {
                   <MenuItem desktopOnly icon={<Download className="size-4" />} onClick={() => (close(), void importSharedWeek({ courseId: id }))}>
                     Add a shared week…
                   </MenuItem>
+                  {topics.some((t) => t.status === 'ready') && (
+                    <MenuItem desktopOnly icon={<Store className="size-4" />} onClick={() => (close(), void publishAllToMarket(id))}>
+                      Publish course to marketplace…
+                    </MenuItem>
+                  )}
                   <MenuItem icon={<CalendarDays className="size-4" />} onClick={() => (close(), setExamOpen(true))}>
                     {c.exam_date ? 'Change exam date…' : 'Set exam date…'}
                   </MenuItem>

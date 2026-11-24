@@ -11,21 +11,22 @@
 // Importing gives everything new ids, so importing twice gives two copies. Slide
 // figures aren't in the file: they're rendered again from the PDFs when shown.
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, extname, join, relative, sep } from 'node:path'
 import JSZip from 'jszip'
 import { getDb, now } from '../db'
 import { paths } from '../paths'
 import { safeFileName } from '../library'
-import { addWeek, createCourse, ensureWeekDeck, fixTopicCardCounts, getCourse, refreshDormancy, syncTopicNote } from './course'
+import { addWeek, createCourse, ensureWeekDeck, fixTopicCardCounts, getCourse, refreshDormancy, syncTopicNote, weekFingerprint } from './course'
+import type { WeekFingerprint } from '@shared/fingerprint'
 
 export const WEEK_EXT = 'studyweek'
 const FORMAT = 1
 
 type Row = Record<string, unknown>
 
-interface WeekJson {
+export interface WeekJson {
   app: 'studywise-courses'
   kind: 'week'
   format: number
@@ -35,6 +36,8 @@ interface WeekJson {
   files: Row[]
   topics: Row[]
   cards: Row[]
+  /** The week's material as a signature (no text), for the marketplace's "already made" check. */
+  fingerprint?: WeekFingerprint
 }
 
 export interface WeekPreview {
@@ -63,6 +66,13 @@ function noProgress(versions: unknown): string {
 }
 
 export async function exportWeek(weekId: string, file: string): Promise<WeekPreview> {
+  const { bytes, json } = await weekZip(weekId)
+  writeFileSync(file, bytes)
+  return previewOf(json)
+}
+
+/** The .studyweek file's bytes (and what's in it). */
+export async function weekZip(weekId: string): Promise<{ bytes: Buffer; json: WeekJson }> {
   const d = getDb()
   const week = d.prepare('SELECT * FROM weeks WHERE id = ?').get(weekId) as Row | undefined
   if (!week) throw new Error('Week not found')
@@ -82,7 +92,8 @@ export async function exportWeek(weekId: string, file: string): Promise<WeekPrev
     week: { ...week, deck_id: null },
     files,
     topics,
-    cards
+    cards,
+    fingerprint: await weekFingerprint(weekId)
   }
   const zip = new JSZip()
   zip.file('week.json', JSON.stringify(json), { compression: 'DEFLATE' })
@@ -90,8 +101,7 @@ export async function exportWeek(weekId: string, file: string): Promise<WeekPrev
     const full = join(courseDir, String(f.path))
     if (existsSync(full)) zip.file(`files/${f.path}`, readFileSync(full))
   }
-  writeFileSync(file, await zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' }))
-  return previewOf(json)
+  return { bytes: await zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' }), json }
 }
 
 function previewOf(j: WeekJson): WeekPreview {
@@ -157,7 +167,27 @@ export async function importWeek(
     for (let n = 2; labels.has(label.toLowerCase()); n++) label = `${json.week.label} (${n})`
     week = addWeek(courseId, label)
     const status = json.week.status === 'planning' ? 'error' : String(json.week.status ?? 'empty')
-    d.prepare('UPDATE weeks SET status = ?, error = ?, outline = ? WHERE id = ?').run(status, status === 'error' ? 'Planning was interrupted. Plan it again.' : (json.week.error ?? null), json.week.outline ?? null, week.id)
+    d.prepare('UPDATE weeks SET status = ?, error = ?, outline = ?, planned_with = ? WHERE id = ?').run(
+      status,
+      status === 'error' ? 'Planning was interrupted. Plan it again.' : (json.week.error ?? null),
+      json.week.outline ?? null,
+      typeof json.week.planned_with === 'string' ? json.week.planned_with : null,
+      week.id
+    )
+  }
+
+  // Merging into a week that already has the same file (your own copy of the
+  // slides): their topics use yours, and the file isn't added a second time.
+  const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
+  const sameAs = new Map<string, { id: string; name: string }>() // their file id → yours
+  if (into) {
+    const mine = (d.prepare('SELECT id, name, path FROM course_files WHERE week_id = ?').all(week.id) as { id: string; name: string; path: string }[]).filter((f) => existsSync(f.path))
+    const byHash = new Map(mine.map((f) => [sha(readFileSync(f.path)), f]))
+    for (const f of json.files) {
+      const entry = zip.file(`files/${String(f.path)}`)
+      const m = entry && byHash.get(sha(await entry.async('nodebuffer')))
+      if (m) sameAs.set(String(f.id).toLowerCase(), { id: m.id, name: m.name })
+    }
   }
 
   // New ids for everything in the file, and the sender's course and week become yours.
@@ -165,7 +195,7 @@ export async function importWeek(
     [String(json.week.course_id).toLowerCase(), courseId],
     [String(json.week.id).toLowerCase(), week.id]
   ])
-  for (const r of [...json.files, ...json.topics, ...json.cards]) if (typeof r.id === 'string') remap.set(r.id.toLowerCase(), randomUUID())
+  for (const r of [...json.files, ...json.topics, ...json.cards]) if (typeof r.id === 'string') remap.set(r.id.toLowerCase(), sameAs.get(r.id.toLowerCase())?.id ?? randomUUID())
   const swap = (s: string) => s.replace(UUID, (m) => remap.get(m.toLowerCase()) ?? m)
 
   // Topic keys follow the week's position here (w3t1 becomes w5t1 as your week 5), and
@@ -198,7 +228,12 @@ export async function importWeek(
   const dir = join(paths.courses, courseId, 'files')
   mkdirSync(dir, { recursive: true })
   const fileRows: { row: Row; from: string; to: string }[] = []
-  for (const f of files) {
+  for (const [i, f] of files.entries()) {
+    const yours = sameAs.get(String(json.files[i].id).toLowerCase())
+    if (yours) {
+      if (yours.name !== f.name) renamed.set(String(f.name), yours.name)
+      continue
+    }
     const orig = safeFileName(String(f.name))
     let name = orig
     for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${basename(orig, extname(orig))} (${n})${extname(orig)}`

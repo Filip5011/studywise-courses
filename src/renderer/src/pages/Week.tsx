@@ -23,6 +23,7 @@ import {
   RefreshCw,
   RotateCcw,
   Share2,
+  Store,
   Sparkles,
   Trash2,
   Upload,
@@ -32,6 +33,7 @@ import { NOTE_LEVEL_INFO, type CourseFile, type CourseFull, type Topic, type Wee
 import { offerPlan, switchLevel, writeTopics } from '../lib/courseFlows'
 import { planUsageText, type JobInfo } from '@shared/types'
 import { shareWeek } from '../lib/weekShare'
+import { publishToMarket } from '../lib/market'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
 import { askText, confirmDialog } from '../lib/dialogs'
@@ -196,6 +198,11 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
                   <MenuItem icon={<Share2 className="size-4" />} onClick={() => (close(), void shareWeek(w.id))}>
                     Share this week…
                   </MenuItem>
+                  {w.topics.some((t) => t.status === 'ready') && (
+                    <MenuItem desktopOnly icon={<Store className="size-4" />} onClick={() => (close(), void publishToMarket(w))}>
+                      Publish to marketplace…
+                    </MenuItem>
+                  )}
                   <MenuItem icon={<Pencil className="size-4" />} onClick={() => (close(), void rename())}>
                     Rename week
                   </MenuItem>

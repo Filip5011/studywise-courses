@@ -1,5 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
+import { FINGERPRINT_VERSION, signature, type WeekFingerprint } from '@shared/fingerprint'
 import { basename, extname, join } from 'node:path'
 import { PDFDocument } from 'pdf-lib'
 import { getDb, uid, now, json } from '../db'
@@ -14,7 +16,8 @@ import { planTracker, topicTracker } from './liveProgress'
 import { verdictFor } from '@shared/marking'
 import { isDue } from '@shared/sm2'
 import type { Mark } from '@shared/questions'
-import type { Card, Deck, ReviewState } from '@shared/types'
+import type { Card, Deck, ModelChoice, ReviewState } from '@shared/types'
+import { activeProvider } from '../ai/models'
 import {
   effectiveDue,
   emptyProgress,
@@ -60,7 +63,7 @@ const WHOLE_PDF_PAGES = 40
 // Rows
 
 type CourseRow = Course & { note_folder_id?: string | null }
-type WeekRow = Omit<Week, 'recall_off'> & { outline: string | null; recall_off: number }
+type WeekRow = Omit<Week, 'recall_off'> & { outline: string | null; recall_off: number; planned_with?: string | null }
 type TopicRow = {
   id: string
   course_id: string
@@ -76,6 +79,8 @@ type TopicRow = {
   note_id: string | null
   level: string | null
   versions: string | null
+  /** {level: ModelChoice}: the model each level was written with. */
+  written_with?: string | null
 }
 type Versions = Partial<Record<NoteLevel, TopicVersion>>
 
@@ -119,7 +124,7 @@ const toTopic = (r: TopicRow, counts: Map<string, number>): Topic => ({
   updated_at: r.updated_at
 })
 
-const toWeek = ({ outline: _o, recall_off, ...w }: WeekRow): Week => ({ ...w, recall_off: !!recall_off })
+const toWeek = ({ outline: _o, recall_off, planned_with: _p, ...w }: WeekRow): Week => ({ ...w, recall_off: !!recall_off })
 
 function courseRow(id: string): CourseRow {
   const r = getDb().prepare('SELECT * FROM courses WHERE id = ?').get(id) as CourseRow | undefined
@@ -204,7 +209,7 @@ function touchCourse(id: string): void {
   getDb().prepare('UPDATE courses SET updated_at = ? WHERE id = ?').run(now(), id)
 }
 
-function setWeek(id: string, patch: { status?: string; error?: string | null; outline?: string | null; label?: string }): void {
+function setWeek(id: string, patch: { status?: string; error?: string | null; outline?: string | null; label?: string; planned_with?: string | null }): void {
   const sets = Object.keys(patch).map((k) => `${k} = @${k}`)
   if (sets.length) getDb().prepare(`UPDATE weeks SET ${sets.join(', ')} WHERE id = @id`).run({ ...patch, id })
 }
@@ -215,7 +220,7 @@ function topicRow(id: string): TopicRow {
   return r
 }
 
-function setTopic(id: string, patch: { status?: string; error?: string | null; content?: string | null; progress?: string; level?: NoteLevel; versions?: string }): void {
+function setTopic(id: string, patch: { status?: string; error?: string | null; content?: string | null; progress?: string; level?: NoteLevel; versions?: string; written_with?: string }): void {
   const sets = Object.keys(patch).map((k) => `${k} = @${k}`)
   getDb().prepare(`UPDATE topics SET ${[...sets, 'updated_at = @updated_at'].join(', ')} WHERE id = @id`).run({ ...patch, updated_at: now(), id })
 }
@@ -551,10 +556,33 @@ async function fileText(f: CourseFile): Promise<string | null> {
   return extractText(f.path)
 }
 
+/**
+ * A week's material as a signature and file hashes, for spotting the same
+ * slides on the marketplace. Nothing from the files themselves is in it.
+ */
+export async function weekFingerprint(weekId: string): Promise<WeekFingerprint> {
+  const week = weekRow(weekId)
+  const files = listFiles(week.course_id).filter((f) => f.week_id === weekId)
+  const texts: string[] = []
+  const hashes: string[] = []
+  for (const f of files) {
+    if (!existsSync(f.path)) continue
+    hashes.push(createHash('sha256').update(readFileSync(f.path)).digest('hex'))
+    const t = await fileText(f).catch(() => null)
+    if (t) texts.push(t)
+  }
+  return { v: FINGERPRINT_VERSION, sig: signature(texts), hashes }
+}
+
 const fileBlock = (name: string, body: string, where = '') => `<file name="${name}"${where ? ` part="${where.replace(/"/g, "'")}"` : ''}>\n${body}\n</file>`
 
 // ---------------------------------------------------------------------------
 // 1. Plan a week's topics
+
+/** The model a call ran on, as recorded with what it made (the provider filled in). */
+function usedModel(m: ModelChoice): ModelChoice {
+  return { model: m.model, effort: m.effort ?? null, provider: m.provider ?? activeProvider() }
+}
 
 const weekNo = (w: Week) => w.position + 1
 const keyFor = (w: Week, localId: string) => `w${weekNo(w)}${localId}` // t3 in week 2 → w2t3
@@ -587,6 +615,7 @@ export async function planWeek(weekId: string, ctx: JobContext, instructions = '
       : ''
 
     live({ stage: 'Sending them to Claude…', percent: 0.08, log: files.map((f) => `Read ${f.name}`) })
+    let plannedWith: ModelChoice | null = null
     const callFor = async (list: typeof texts, partInfo: string, from = 0.1, to = 0.95): Promise<CourseOutline> => {
       // PDFs without a text layer go in as files so Claude can look at the slides.
       // Scanned PDFs and pictures go in as files so Claude can look at them.
@@ -599,6 +628,7 @@ export async function planWeek(weekId: string, ctx: JobContext, instructions = '
         deckId: ensureWeekDeck(weekId),
         signal: ctx.signal
       })
+      plannedWith = usedModel(r.model)
       return r.data
     }
 
@@ -638,7 +668,7 @@ export async function planWeek(weekId: string, ctx: JobContext, instructions = '
       const ins = d.prepare("INSERT INTO topics (id, course_id, week_id, key, position, plan, status, error, content, progress, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'planned', NULL, NULL, '{}', ?)")
       topics.forEach((t, i) => ins.run(uid(), course.id, weekId, t.id, i, JSON.stringify(t), now()))
     })()
-    setWeek(weekId, { status: 'ready', error: null, outline: JSON.stringify({ ...outline, topics }) })
+    setWeek(weekId, { status: 'ready', error: null, outline: JSON.stringify({ ...outline, topics }), planned_with: plannedWith ? JSON.stringify(plannedWith) : null })
     touchCourse(course.id)
     return { topics: topics.length }
   } catch (e) {
@@ -1003,6 +1033,7 @@ async function writeTopicLevel(topicId: string, ctx: JobContext, instructions: s
       cardCount = cards.length
     }
     storeLevel(topicId, level, content, show)
+    setTopic(topicId, { written_with: JSON.stringify({ ...json<Record<string, ModelChoice>>(topicRow(topicId).written_with, {}), [level]: usedModel(r.model) }) })
     // Its cards wait until you study it.
     refreshDormancy(topicId)
     touchCourse(course.id)

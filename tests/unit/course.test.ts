@@ -568,7 +568,30 @@ describe('dropping a shared week into an existing week', () => {
     // The friend's topic that built on their t1 now points at its new number here.
     expect(topics[4].plan.needs).toEqual(['w2t4'])
     expect(repo.listCards(svc.getCourse(mine.id).weeks[1].deck_id!).length).toBe(r.cards)
-    // Same file name as the week's own: numbered, not overwritten.
-    expect(svc.listFiles(mine.id).filter((f) => f.week_id === w2.id).map((f) => f.name)).toEqual(['photoelectric-lecture.pdf', 'photoelectric-lecture (2).pdf'])
+    // The same slides the week already has: its own copy is used, not added twice.
+    const w2Files = svc.listFiles(mine.id).filter((f) => f.week_id === w2.id)
+    expect(w2Files.map((f) => f.name)).toEqual(['photoelectric-lecture.pdf'])
+    for (const t of topics.filter((x) => x.status === 'ready')) for (const s of t.content!.sections) if (s.figure) expect(s.figure.fileId).toBe(w2Files[0].id)
+  })
+
+  it('numbers a different file that has the same name, rather than overwriting it', async () => {
+    const share = await import('../../src/main/services/weekShare')
+    const { writeFileSync, mkdirSync } = await import('node:fs')
+    const a = join(dir, 'a')
+    const b = join(dir, 'b')
+    mkdirSync(a, { recursive: true })
+    mkdirSync(b, { recursive: true })
+    writeFileSync(join(a, 'notes.txt'), 'Their notes on entropy.')
+    writeFileSync(join(b, 'notes.txt'), 'My own notes on enthalpy.')
+    const src = svc.createCourse({ name: 'Friend 2', level: '' })
+    const fw = svc.addWeek(src.id, 'Week 1')
+    await svc.addFiles(fw.id, [join(a, 'notes.txt')])
+    const file = join(dir, 'names.studyweek')
+    await share.exportWeek(fw.id, file)
+    const mine = svc.createCourse({ name: 'Mine 2', level: '' })
+    const w = svc.addWeek(mine.id, 'Week 1')
+    await svc.addFiles(w.id, [join(b, 'notes.txt')])
+    await share.importWeek(file, { weekId: w.id })
+    expect(svc.listFiles(mine.id).map((f) => f.name)).toEqual(['notes.txt', 'notes (2).txt'])
   })
 })
