@@ -98,6 +98,22 @@ export function authorsText(shown: string[]): string {
   return `${shown[0]}, ${shown[1]} and ${shown.length - 2} others`
 }
 
+/**
+ * A course's weeks grouped by week number, in order, so everyone's version of
+ * week 3 sits together. In each group the most downloaded version comes
+ * first, then the most recently updated.
+ */
+export function weeksByNumber<W extends Pick<MarketWeek, 'number' | 'downloads' | 'updatedAt'>>(weeks: W[]): { number: number; versions: W[] }[] {
+  const groups = new Map<number, W[]>()
+  for (const w of weeks) groups.set(w.number, [...(groups.get(w.number) ?? []), w])
+  return [...groups.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([number, versions]) => ({
+      number,
+      versions: versions.sort((a, b) => b.downloads - a.downloads || b.updatedAt.localeCompare(a.updatedAt))
+    }))
+}
+
 /** "opus · high", "sonnet", "gpt-oss:120b (Ollama) · high". */
 export function modelLabel(m: { model: string; effort?: string | null; provider?: string | null }): string {
   const name = m.provider === 'ollama' ? `${m.model} (Ollama)` : m.model

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import JSZip from 'jszip'
 import { signature, similarity, words, SIGNATURE_SIZE } from '@shared/fingerprint'
-import { authorsText, modelLabel } from '@shared/market'
+import { authorsText, modelLabel, weeksByNumber } from '@shared/market'
 
 const lecture = (topic: string, n: number) =>
   Array.from({ length: n }, (_, i) => `In ${topic} the ${i}th idea builds on the one before it, and the lecture works an example through step by step.`).join(' ')
@@ -37,6 +37,14 @@ describe('week fingerprints', () => {
     expect(authorsText(['alex', 'sam'])).toBe('alex and sam')
     expect(authorsText(['alex', 'sam', 'kim'])).toBe('alex, sam and kim')
     expect(authorsText(['alex', 'sam', 'kim', 'lee', 'pat'])).toBe('alex, sam and 3 others')
+  })
+
+  it('groups versions of the same week, most downloaded then newest first', () => {
+    const w = (id: string, number: number, downloads: number, updatedAt: string) => ({ id, number, downloads, updatedAt })
+    const groups = weeksByNumber([w('a', 3, 1, '2026-01-01'), w('b', 1, 0, '2026-01-01'), w('c', 3, 5, '2026-01-01'), w('d', 3, 1, '2026-02-01'), w('e', 2, 0, '2026-01-01')])
+    expect(groups.map((g) => g.number)).toEqual([1, 2, 3])
+    expect(groups.map((g) => g.versions.map((v) => v.id))).toEqual([['b'], ['e'], ['c', 'd', 'a']])
+    expect(weeksByNumber([])).toEqual([])
   })
 
   it('labels models', () => {
