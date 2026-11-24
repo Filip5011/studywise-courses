@@ -92,6 +92,7 @@
   },
   "allowScripts": {
     "better-sqlite3": false,
+    "electron": true,
     "esbuild@0.28.2": true,
     "electron-winstaller@5.4.0": true
   }

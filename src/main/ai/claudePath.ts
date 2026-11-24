@@ -22,7 +22,11 @@ const IS_WIN = process.platform === 'win32'
  */
 export function spawnTarget(path: string, pathEnv: string): { cmd: string; prefix: string[] } {
   if (IS_WIN && /\.(cmd|bat)$/i.test(path)) {
-    const cli = join(dirname(path), 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js')
+    const pkg = join(dirname(path), 'node_modules', '@anthropic-ai', 'claude-code')
+    // Newer packages ship a native binary instead of cli.js.
+    const exe = join(pkg, 'bin', 'claude.exe')
+    if (existsSync(exe)) return { cmd: exe, prefix: [] }
+    const cli = join(pkg, 'cli.js')
     const nodeCandidates = [join(dirname(path), 'node.exe'), ...pathEnv.split(delimiter).map((d) => join(d, 'node.exe'))]
     const node = nodeCandidates.find((p) => existsSync(p))
     if (existsSync(cli) && node) return { cmd: node, prefix: [cli] }
@@ -32,10 +36,15 @@ export function spawnTarget(path: string, pathEnv: string): { cmd: string; prefi
 
 function run(cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv; timeout?: number } = {}): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    execFile(cmd, args, { env: opts.env, timeout: opts.timeout ?? 10000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
-      const code = err ? (typeof (err as NodeJS.ErrnoException).code === 'number' ? ((err as unknown as { code: number }).code) : 1) : 0
-      resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), code })
-    })
+    try {
+      execFile(cmd, args, { env: opts.env, timeout: opts.timeout ?? 10000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+        const code = err ? (typeof (err as NodeJS.ErrnoException).code === 'number' ? ((err as unknown as { code: number }).code) : 1) : 0
+        resolve({ stdout: String(stdout ?? ''), stderr: String(stderr ?? ''), code })
+      })
+    } catch (e) {
+      // e.g. spawn EINVAL when Windows refuses to run a .cmd without a shell
+      resolve({ stdout: '', stderr: String((e as Error)?.message ?? e), code: 1 })
+    }
   })
 }
 
