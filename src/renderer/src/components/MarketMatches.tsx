@@ -12,14 +12,16 @@ type Answer = { use: string } | 'plan' | null
 interface Ask {
   label: string
   matches: MarketMatch[]
+  /** About to plan it (with its files), or just added it. */
+  planning: boolean
   resolve: (a: Answer) => void
 }
 
 const useAsk = create<{ ask: Ask | null }>(() => ({ ask: null }))
 
 /** Resolves to the published week to use, 'plan' to plan it yourself, or null to do neither. */
-export function askAboutMatches(label: string, matches: MarketMatch[]): Promise<Answer> {
-  return new Promise((resolve) => useAsk.setState({ ask: { label, matches, resolve } }))
+export function askAboutMatches(label: string, matches: MarketMatch[], opts: { planning?: boolean } = {}): Promise<Answer> {
+  return new Promise((resolve) => useAsk.setState({ ask: { label, matches, planning: opts.planning ?? true, resolve } }))
 }
 
 export function MarketMatchesHost() {
@@ -35,11 +37,13 @@ export function MarketMatchesHost() {
       title={ask ? `Someone has already made ${ask.label}` : ''}
       footer={
         <>
-          <Button variant="ghost" onClick={() => done(null)}>
-            Cancel
-          </Button>
+          {ask?.planning !== false && (
+            <Button variant="ghost" onClick={() => done(null)}>
+              Cancel
+            </Button>
+          )}
           <Button onClick={() => done('plan')}>
-            <Sparkles className="size-4" /> Plan it myself anyway
+            <Sparkles className="size-4" /> {ask?.planning === false ? 'I’ll make it myself' : 'Plan it myself anyway'}
           </Button>
         </>
       }
@@ -47,7 +51,10 @@ export function MarketMatchesHost() {
       {ask && (
         <div className="flex flex-col gap-3">
           <p className="text-[0.92rem] text-muted">
-            {ask.matches.length === 1 ? 'A week on the marketplace was' : `${ask.matches.length} weeks on the marketplace were`} made from the same material. Adding one costs no tokens; planning and writing it yourself does.
+            {ask.matches.some((m) => m.score >= 0.35 || m.sameFiles)
+              ? `${ask.matches.length === 1 ? 'A week on the marketplace was' : `${ask.matches.length} weeks on the marketplace were`} made from the same material.`
+              : `${ask.matches.length === 1 ? 'Someone has' : 'People have'} published ${ask.label} of what looks like the same course.`}{' '}
+            Adding one costs no tokens; planning and writing it yourself does.
           </p>
           {ask.matches.map((m) => (
             <div key={m.week.id} className="flex flex-col gap-2 rounded-xl border border-line bg-surface-2/50 p-4">
@@ -61,7 +68,9 @@ export function MarketMatchesHost() {
                     {m.week.mine && ' (you)'} · {m.week.downloads} download{m.week.downloads === 1 ? '' : 's'}
                   </div>
                 </div>
-                <Pill tone={m.score >= 0.7 ? 'good' : 'accent'}>{m.sameFiles ? `${m.sameFiles} same file${m.sameFiles === 1 ? '' : 's'}` : `${matchPercent(m)} the same`}</Pill>
+                <Pill tone={m.score >= 0.7 || m.sameFiles ? 'good' : 'accent'}>
+                  {m.sameFiles ? `${m.sameFiles} same file${m.sameFiles === 1 ? '' : 's'}` : m.score >= 0.35 ? `${matchPercent(m)} the same` : 'Same course and week'}
+                </Pill>
               </div>
               <div className="text-[0.88rem] text-muted">{weekSummary(m.week)}</div>
               <div className="text-[0.85rem]">

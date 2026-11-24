@@ -6,6 +6,7 @@ import type { CourseSummary } from '@shared/course'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
 import { offerPlan } from '../lib/courseFlows'
+import { offerMarketWeek } from '../lib/market'
 import { Shell, PageTitle } from '../components/Shell'
 import { Button, Card, Empty, Field, Input, Modal, Pill, ProgressBar, Textarea } from '../components/ui'
 
@@ -138,6 +139,8 @@ export function NewCourseModal() {
       // Files are added, not planned: ask first.
       const week = c.weeks.find((w) => w.id === c.firstWeekId)
       if (list.length && week) await offerPlan(week, { added: week.files.length })
+      // No files yet: has someone already made this week of this course?
+      else if (week) await offerMarketWeek(week)
     } catch (e) {
       toast(errorText(e), 'bad')
     } finally {

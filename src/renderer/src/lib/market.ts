@@ -95,4 +95,16 @@ export async function publishAllToMarket(courseId?: string): Promise<boolean> {
   }
 }
 
+/**
+ * Just added a week with nothing in it yet: if someone has already published
+ * that week of what looks like the same course, offer theirs.
+ */
+export async function offerMarketWeek(week: { id: string; label: string }): Promise<void> {
+  const matches = await api.market.similar({ weekId: week.id }).catch(() => [])
+  if (!matches.length) return
+  const { askAboutMatches } = await import('../components/MarketMatches')
+  const a = await askAboutMatches(week.label, matches, { planning: false })
+  if (a && a !== 'plan') await useMarketWeekHere(a.use, week)
+}
+
 export const matchPercent = (m: MarketMatch) => `${Math.round(m.score * 100)}%`

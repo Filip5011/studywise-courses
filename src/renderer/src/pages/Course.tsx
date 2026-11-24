@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff, CalendarDays, Scissors, StickyNote, Store } from 'lucide-react'
 import { offerPlan, writeTopics } from '../lib/courseFlows'
 import { importSharedWeek } from '../lib/weekShare'
-import { publishAllToMarket } from '../lib/market'
+import { offerMarketWeek, publishAllToMarket } from '../lib/market'
 import { TrimCardsModal } from '../components/TrimCards'
 import { examPhase, revisionMaxGapDays, type CourseFull, type WeekFull } from '@shared/course'
 import { useStore, toast } from '../lib/store'
@@ -432,8 +432,10 @@ function AddWeekModal({ courseId, defaultLabel, onClose, onDone }: { courseId: s
     try {
       const w = await api.courses.addWeek({ courseId, label: label.trim(), files })
       onDone()
-      // Files are added, not planned: ask first.
+      // Files are added, not planned: ask first (that checks the marketplace too).
       if (files.length) await offerPlan(w, { added: files.length })
+      // No files yet: has someone already made this week?
+      else await offerMarketWeek(w)
     } catch (e) {
       toast(errorText(e), 'bad')
     } finally {

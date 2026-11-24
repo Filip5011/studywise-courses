@@ -1,8 +1,17 @@
-// Self-update for a copy run from its git checkout (`npm run dev` or `npm start`).
-// It checks GitHub for new commits on the current branch; when you ask, it
-// pulls them (fast-forward only), runs npm install if the packages changed, and
-// starts the app again. Installed builds don't use this.
-import { app } from 'electron'
+// Self-update.
+//
+// A copy run from its git checkout (`npm run dev` or `npm start`) checks GitHub
+// for new commits on the current branch; when you ask, it pulls them
+// (fast-forward only), runs npm install if the packages changed, and starts
+// the app again.
+//
+// An installed build checks the GitHub releases instead (electron-updater
+// reads latest.yml / latest-mac.yml from the newest release). On Windows it
+// downloads the new version in the background and installs it when you
+// restart or quit. A Mac build isn't signed with a Developer ID, and macOS
+// won't let an unsigned app replace itself, so there it says there's a new
+// version and links to it.
+import { app, shell } from 'electron'
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { join } from 'node:path'
@@ -13,13 +22,36 @@ import { paths } from './paths'
 
 const IS_WIN = process.platform === 'win32'
 const CHECK_EVERY_MS = 30 * 60_000
+/** Releases come out far less often than commits. */
+const RELEASE_CHECK_EVERY_MS = 2 * 60 * 60_000
 const FIRST_CHECK_MS = 15_000
+const RELEASES_URL = 'https://github.com/SnakeLuck360GT/studywise-courses/releases'
 
 // `app` is missing when this is loaded outside Electron (unit tests).
 const root = app?.getAppPath?.() ?? process.cwd()
-const supported = !!app && !app.isPackaged && process.env.AI_MOCK !== '1' && existsSync(join(root, '.git'))
+const gitSupported = !!app && !app.isPackaged && process.env.AI_MOCK !== '1' && existsSync(join(root, '.git'))
+const releaseSupported = !!app && app.isPackaged && process.env.AI_MOCK !== '1' && (IS_WIN || process.platform === 'darwin')
+const supported = gitSupported || releaseSupported
+const kind: UpdateStatus['kind'] = gitSupported ? 'git' : 'release'
+/** Windows builds install updates themselves; Mac builds can't (see the top of this file). */
+const CAN_INSTALL = IS_WIN
 
-let status: UpdateStatus = { supported, behind: 0, ahead: 0, dirty: false, branch: null, changes: [], state: 'idle', stage: null, error: null, checkedAt: null }
+let status: UpdateStatus = {
+  supported,
+  kind,
+  version: null,
+  ready: false,
+  downloadUrl: null,
+  behind: 0,
+  ahead: 0,
+  dirty: false,
+  branch: null,
+  changes: [],
+  state: 'idle',
+  stage: null,
+  error: null,
+  checkedAt: null
+}
 let notify: (s: UpdateStatus) => void = () => {}
 
 function set(patch: Partial<UpdateStatus>): UpdateStatus {
@@ -46,7 +78,7 @@ const git = (...args: string[]) => run('git', args)
  * copy run from git, whose updates (git pull) don't change the version number.
  */
 export function buildId(version: string): string {
-  if (!supported) return version
+  if (!gitSupported) return version
   try {
     const head = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, timeout: 5000, windowsHide: true, encoding: 'utf8' }).trim()
     return head ? `${version}+${head}` : version
@@ -59,7 +91,73 @@ export function updateStatus(): UpdateStatus {
   return status
 }
 
+// ---------------------------------------------------------------------------
+// Installed builds: GitHub releases
+
+type AutoUpdater = (typeof import('electron-updater'))['autoUpdater']
+let updater: AutoUpdater | null = null
+
+/** electron-updater, set up on first use (it's only ever loaded in an installed build). */
+function releaseUpdater(): AutoUpdater {
+  if (updater) return updater
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const u = (require('electron-updater') as typeof import('electron-updater')).autoUpdater
+  u.autoDownload = CAN_INSTALL
+  u.autoInstallOnAppQuit = CAN_INSTALL
+  u.allowPrerelease = false
+  u.logger = null
+  u.on('update-available', (info) =>
+    set({
+      behind: 1,
+      version: info.version,
+      downloadUrl: CAN_INSTALL ? null : `${RELEASES_URL}/tag/v${info.version}`,
+      state: CAN_INSTALL ? 'updating' : 'idle',
+      stage: CAN_INSTALL ? `Downloading version ${info.version}…` : null,
+      error: null
+    })
+  )
+  u.on('download-progress', (p) => set({ stage: `Downloading version ${status.version}… ${Math.round(p.percent)}%` }))
+  u.on('update-downloaded', (info) => set({ state: 'idle', stage: null, ready: true, version: info.version }))
+  u.on('error', (e) => {
+    // Offline, or GitHub having a moment: try again at the next check.
+    console.warn('[update] release check failed:', e?.message)
+    if (status.state === 'updating' || status.state === 'checking') set({ state: 'idle', stage: null })
+  })
+  updater = u
+  return u
+}
+
+async function checkRelease(): Promise<UpdateStatus> {
+  if (status.ready || status.state === 'updating' || status.state === 'restarting') return status
+  set({ state: 'checking' })
+  try {
+    await releaseUpdater().checkForUpdates()
+  } catch (e) {
+    console.warn('[update] release check failed:', (e as Error).message)
+  }
+  // An update found is already downloading ('updating'); otherwise there's nothing new.
+  return status.state === 'checking' ? set({ state: 'idle', checkedAt: new Date().toISOString() }) : set({ checkedAt: new Date().toISOString() })
+}
+
+async function applyRelease(): Promise<UpdateStatus> {
+  if (!CAN_INSTALL) {
+    // A Mac build can't replace itself: open the release to download.
+    await shell.openExternal(status.downloadUrl ?? `${RELEASES_URL}/latest`)
+    return status
+  }
+  if (!status.ready) throw new Error('The update is still downloading.')
+  if (runningJobCount() > 0) throw new Error('Wait for the running jobs to finish first (see the Jobs page), then update.')
+  set({ state: 'restarting', stage: 'Installing the update…' })
+  // Silent install, then open the new version.
+  setTimeout(() => releaseUpdater().quitAndInstall(true, true), 300)
+  return status
+}
+
+// ---------------------------------------------------------------------------
+// Copies run from git
+
 export async function checkForUpdate(): Promise<UpdateStatus> {
+  if (kind === 'release') return supported ? checkRelease() : status
   if (!supported || status.state === 'updating' || status.state === 'restarting') return status
   set({ state: 'checking' })
   try {
@@ -92,6 +190,7 @@ export async function checkForUpdate(): Promise<UpdateStatus> {
 
 export async function applyUpdate(): Promise<UpdateStatus> {
   if (!supported) throw new Error('This copy can’t update itself.')
+  if (kind === 'release') return applyRelease()
   if (status.state === 'updating' || status.state === 'restarting') return status
   if (runningJobCount() > 0) throw new Error('Wait for the running jobs to finish first (see the Jobs page), then update.')
   try {
@@ -157,10 +256,10 @@ function restart(): void {
   setTimeout(() => app.quit(), 400)
 }
 
-/** Check soon after launch, then every half hour. Status changes go to `onChange`. */
+/** Check soon after launch, then every half hour (installed builds: every two hours). Status changes go to `onChange`. */
 export function startUpdateChecks(onChange: (s: UpdateStatus) => void): void {
   notify = onChange
   if (!supported) return
   setTimeout(() => void checkForUpdate(), FIRST_CHECK_MS)
-  setInterval(() => void checkForUpdate(), CHECK_EVERY_MS)
+  setInterval(() => void checkForUpdate(), kind === 'release' ? RELEASE_CHECK_EVERY_MS : CHECK_EVERY_MS)
 }

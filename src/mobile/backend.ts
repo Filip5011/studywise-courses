@@ -31,7 +31,7 @@ const PLATFORM: MobileApi['platform'] = (() => {
   return cap.getPlatform() === 'ios' ? 'ios' : 'android'
 })()
 
-const noUpdates: UpdateStatus = { supported: false, behind: 0, ahead: 0, dirty: false, branch: null, changes: [], state: 'idle', stage: null, error: null, checkedAt: null }
+const noUpdates: UpdateStatus = { supported: false, kind: 'git', version: null, ready: false, downloadUrl: null, behind: 0, ahead: 0, dirty: false, branch: null, changes: [], state: 'idle', stage: null, error: null, checkedAt: null }
 const claudeHere: ClaudeStatus = { path: 'computer', version: null, loggedIn: true, authMethod: null, error: null, overridePath: null, mock: true }
 const aiHere: AiStatus = { provider: 'claude', ollama: { baseUrl: '', cloud: false, hasKey: false, keyFromEnv: false, ready: true, defaultModel: '', saved: [] } }
 

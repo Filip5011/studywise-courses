@@ -199,17 +199,19 @@ export async function download(remoteWeekId: string): Promise<string> {
 }
 
 /**
- * Published weeks made from (nearly) the same material as this week, before
- * you spend tokens planning it. Never throws: no marketplace, no key, or the
- * site being down all just mean no warning.
+ * Published weeks someone else already made of this week, before you spend
+ * tokens on it: made from (nearly) the same material, or the same week number
+ * of what looks like the same course. Never throws: no marketplace, no key,
+ * or the site being down all just mean no warning.
  */
 export async function similar(weekId: string): Promise<MarketMatch[]> {
   if (!isReady()) return []
   try {
     const fp = await weekFingerprint(weekId)
-    if (!fp.sig && !fp.hashes.length) return []
+    const w = getDb().prepare('SELECT w.label, c.name, c.module FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.id = ?').get(weekId) as { label: string; name: string; module: string } | undefined
+    if (!w) return []
     const own = published()[weekId]
-    const r = await request<{ matches: MarketMatch[] }>('/api/similar', { ...json(fp), timeoutMs: SIMILAR_TIMEOUT_MS })
+    const r = await request<{ matches: MarketMatch[] }>('/api/similar', { ...json({ ...fp, course: w.name, module: w.module, week: w.label }), timeoutMs: SIMILAR_TIMEOUT_MS })
     // Only other people's weeks: your own published ones came from your courses already.
     return r.matches.filter((m) => m.week.id !== own && !m.week.mine)
   } catch {

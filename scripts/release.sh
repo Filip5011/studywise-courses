@@ -12,7 +12,9 @@ set -euo pipefail
 REPO="SnakeLuck360GT/studywise-courses"
 VERSION="v$(node -p "require('./package.json').version")"
 NOTES="docs/release-notes-${VERSION}.md"
-ASSETS=(release/Studywise-Courses.dmg release/Studywise-Courses-mac.zip release/Studywise-Courses-Setup.exe release/Studywise-Courses-win-x64.zip)
+# latest*.yml and the blockmaps are what installed copies read to update themselves.
+ASSETS=(release/Studywise-Courses.dmg release/Studywise-Courses-mac.zip release/Studywise-Courses-Setup.exe release/Studywise-Courses-win-x64.zip
+  release/latest.yml release/latest-mac.yml release/Studywise-Courses-Setup.exe.blockmap release/Studywise-Courses-mac.zip.blockmap)
 
 : "${GITHUB_TOKEN:?Set GITHUB_TOKEN first}"
 for f in "${ASSETS[@]}"; do [ -f "$f" ] || { echo "Missing $f. Run npm run dist and npm run dist:win."; exit 1; }; done

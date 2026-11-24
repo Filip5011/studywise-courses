@@ -75,6 +75,8 @@ export interface MarketMatch {
   score: number
   /** How many of your files are byte-for-byte the same as theirs. */
   sameFiles: number
+  /** The same week number of what looks like the same course (by name), whatever the slides. */
+  sameWeek: boolean
 }
 
 export interface MarketStatus {
