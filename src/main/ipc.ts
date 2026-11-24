@@ -411,7 +411,12 @@ export const handlers = {
     /** Write topics at one or more levels of detail (all levels are kept). No levels: write the level shown again. */
     write: h(z.object({ topicIds: z.array(id).min(1).max(200), instructions: z.string().max(4000).default(''), levels: z.array(z.enum(NOTE_LEVELS)).max(3).default([]) }), (i) => {
       const topics = i.topicIds.map((tid) => course.getTopic(tid)).filter((t) => t.status !== 'writing')
-      return topics.map((t) => startJob('course_topic', `Topic: ${t.plan.title}`, (ctx) => course.writeTopic(t.id, ctx, i.instructions, i.levels)))
+      return topics.map((t) =>
+        startJob('course_topic', `Topic: ${t.plan.title}`, (ctx) =>
+          // Done or not, the week may be ready to publish (Settings → Marketplace → automatically).
+          course.writeTopic(t.id, ctx, i.instructions, i.levels).finally(() => market.queueAutoPublish(t.week_id))
+        )
+      )
     }),
     /** Show a topic at another level of detail it's written at. */
     setLevel: h(z.object({ topicId: id, level: z.enum(NOTE_LEVELS) }), (i) => course.setTopicLevel(i.topicId, i.level)),

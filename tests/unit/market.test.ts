@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -115,5 +115,59 @@ describe('publishing a week (mock AI)', () => {
     const merged = svc.listTopics(mine.id).filter((t) => t.status === 'ready')
     const figures = merged.flatMap((t) => t.content!.sections.map((s) => s.figure).filter(Boolean))
     for (const f of figures) expect(f!.fileId).toBe(files[0].id)
+  })
+})
+
+describe('publishing automatically', () => {
+  it('waits for the week’s topics, publishes once, and never touches weeks with someone else’s work', async () => {
+    const market = await import('../../src/main/services/market')
+    const repo = await import('../../src/main/db/repo')
+    const { setSecret } = await import('../../src/main/secrets')
+    const jobs = await import('../../src/main/jobs')
+    const course = svc.createCourse({ name: 'Auto 101', level: '' })
+    const w = svc.addWeek(course.id)
+    await svc.addFiles(w.id, [PDF])
+    await svc.planWeek(w.id, ctx())
+    const [t1] = svc.listTopics(course.id)
+    await svc.writeTopic(t1.id, ctx())
+
+    // Off by default.
+    market.queueAutoPublish(w.id)
+    expect(market.pendingAutoPublish()).toEqual([])
+    // On, but no marketplace connected: nothing.
+    repo.setSetting('market.autoPublish', true)
+    market.queueAutoPublish(w.id)
+    expect(market.pendingAutoPublish()).toEqual([])
+
+    // (Zipping needs real timers, so the shared week goes in first.)
+    const file = join(dir, 'auto.studyweek')
+    await share.exportWeek(w.id, file)
+    const into = svc.addWeek(course.id, 'Week 2')
+    await share.importWeek(file, { weekId: into.id })
+
+    repo.setSetting('market.url', 'http://localhost:1')
+    setSecret('secret.marketKey', 'swm_test')
+    vi.useFakeTimers()
+    try {
+      // Several topics finishing: one publish, after the last.
+      market.queueAutoPublish(w.id)
+      market.queueAutoPublish(w.id)
+      expect(market.pendingAutoPublish()).toEqual([w.id])
+      // Another topic still writing when the wait is over: not yet.
+      getDb().prepare("UPDATE topics SET status = 'writing' WHERE id != ? AND week_id = ?").run(t1.id, w.id)
+      const before = jobs.listJobs().length
+      vi.advanceTimersByTime(market.AUTO_PUBLISH_DELAY_MS)
+      expect(market.pendingAutoPublish()).toEqual([])
+      expect(jobs.listJobs().length).toBe(before)
+      getDb().prepare("UPDATE topics SET status = 'planned' WHERE status = 'writing' AND week_id = ?").run(w.id)
+
+      // A shared week merged in: it's someone else's work now, so never automatic.
+      market.queueAutoPublish(into.id)
+      expect(market.pendingAutoPublish()).toEqual([])
+    } finally {
+      vi.useRealTimers()
+      repo.setSetting('market.autoPublish', false)
+      setSecret('secret.marketKey', null)
+    }
   })
 })

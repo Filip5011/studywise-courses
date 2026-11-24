@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { ExternalLink, Store } from 'lucide-react'
-import type { MarketStatus } from '@shared/market'
+import { AUTO_PUBLISH_SETTING, type MarketStatus } from '@shared/market'
 import { api, errorText } from '../lib/api'
 import { toast } from '../lib/store'
-import { Button, Card, Field, Input, Pill } from './ui'
+import { confirmDialog } from '../lib/dialogs'
+import { Button, Card, Field, Input, Pill, Toggle } from './ui'
 
 /**
  * Connect to a marketplace: its address, and an API key made on its account
@@ -16,8 +17,10 @@ export function MarketSetup({ onConnected }: { onConnected?: () => void }) {
   const [user, setUser] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [auto, setAuto] = useState(false)
 
   useEffect(() => {
+    void api.settings.all().then((s) => setAuto(s[AUTO_PUBLISH_SETTING] === true))
     api.market
       .status()
       .then((s) => {
@@ -61,6 +64,20 @@ export function MarketSetup({ onConnected }: { onConnected?: () => void }) {
     setStatus(await api.market.status())
   }
 
+  const setAutoPublish = async (on: boolean) => {
+    if (
+      on &&
+      !(await confirmDialog(
+        'Publish your weeks automatically?',
+        'Each week you write topics in is published once they finish, with its slides and transcripts, and published again when you write more. Weeks you added from someone else are never published automatically. Weeks you wrote before turning this on aren’t published until you write in them again, or use Publish all my courses. Only turn this on if you’re allowed to share your course material.',
+        { confirmText: 'Turn on' }
+      ))
+    )
+      return
+    setAuto(on)
+    await api.settings.set({ key: AUTO_PUBLISH_SETTING, value: on })
+  }
+
   const site = (() => {
     try {
       return url.trim() ? new URL(/^[a-z]+:\/\//i.test(url.trim()) ? url.trim() : `https://${url.trim()}`).origin : null
@@ -85,6 +102,12 @@ export function MarketSetup({ onConnected }: { onConnected?: () => void }) {
       <Field label="API key" hint={status.hasKey ? 'A key is saved. Paste a new one to replace it.' : site ? undefined : 'Made on the marketplace’s account page.'}>
         <Input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={status.hasKey ? '••••••••' : 'swm_…'} spellCheck={false} onKeyDown={(e) => e.key === 'Enter' && void connect()} />
       </Field>
+      {status.hasKey && (
+        <div className="flex flex-col gap-1 rounded-lg bg-surface-2/60 px-3 py-2.5">
+          <Toggle checked={auto} onChange={(v) => void setAutoPublish(v)} label="Publish my weeks automatically" />
+          <div className="text-[0.84rem] text-muted">When a week’s topics finish writing, it’s published (or updated) on the marketplace. Weeks you added from someone else never are.</div>
+        </div>
+      )}
       {error && <div className="rounded-lg bg-bad-soft px-3 py-2 text-[0.88rem] text-bad">{error}</div>}
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" loading={busy} disabled={!url.trim() || (!key.trim() && !status.hasKey)} onClick={connect}>

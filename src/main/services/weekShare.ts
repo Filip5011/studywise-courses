@@ -20,6 +20,8 @@ import { paths } from '../paths'
 import { safeFileName } from '../library'
 import { addWeek, createCourse, ensureWeekDeck, fixTopicCardCounts, getCourse, refreshDormancy, syncTopicNote, weekFingerprint } from './course'
 import type { WeekFingerprint } from '@shared/fingerprint'
+import { IMPORTED_WEEKS_SETTING } from '@shared/market'
+import { getSetting, setSetting } from '../db/repo'
 
 export const WEEK_EXT = 'studyweek'
 const FORMAT = 1
@@ -175,6 +177,9 @@ export async function importWeek(
       week.id
     )
   }
+
+  // It holds someone else's work now, so it's never published for you automatically.
+  setSetting(IMPORTED_WEEKS_SETTING, [...new Set([...getSetting<string[]>(IMPORTED_WEEKS_SETTING, []), week.id])])
 
   // Merging into a week that already has the same file (your own copy of the
   // slides): their topics use yours, and the file isn't added a second time.

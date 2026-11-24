@@ -11,8 +11,8 @@ import { getSecret, setSecret } from '../secrets'
 import { getDb } from '../db'
 import { weekFingerprint } from './course'
 import { weekZip } from './weekShare'
-import type { JobContext } from '../jobs'
-import type { MarketCourse, MarketCourseFull, MarketMatch, MarketSort, MarketStatus, MarketWeek } from '@shared/market'
+import { startJob, type JobContext } from '../jobs'
+import { AUTO_PUBLISH_SETTING, IMPORTED_WEEKS_SETTING, type MarketCourse, type MarketCourseFull, type MarketMatch, type MarketSort, type MarketStatus, type MarketWeek } from '@shared/market'
 
 const URL_SETTING = 'market.url'
 const KEY_SETTING = 'secret.marketKey' as const
@@ -215,4 +215,40 @@ export async function similar(weekId: string): Promise<MarketMatch[]> {
   } catch {
     return []
   }
+}
+
+// ---------------------------------------------------------------------------
+// Publishing automatically (Settings → Marketplace)
+
+/** Wait this long after a topic finishes, so writing a whole week publishes it once. */
+export const AUTO_PUBLISH_DELAY_MS = 20_000
+const pending = new Map<string, ReturnType<typeof setTimeout>>()
+
+export const autoPublishOn = () => getSetting<boolean>(AUTO_PUBLISH_SETTING, false) === true
+
+/** Weeks waiting to be published automatically (for tests). */
+export const pendingAutoPublish = () => [...pending.keys()]
+
+/**
+ * A topic in this week finished writing (or failed): publish the week once
+ * its other topics are done. Weeks with someone else's work in them never go
+ * automatically.
+ */
+export function queueAutoPublish(weekId: string): void {
+  if (!autoPublishOn() || !isReady()) return
+  if (getSetting<string[]>(IMPORTED_WEEKS_SETTING, []).includes(weekId)) return
+  clearTimeout(pending.get(weekId))
+  pending.set(
+    weekId,
+    setTimeout(() => {
+      pending.delete(weekId)
+      const d = getDb()
+      // Still writing: the last topic to finish queues it again.
+      if (d.prepare("SELECT 1 FROM topics WHERE week_id = ? AND status = 'writing'").get(weekId)) return
+      if (!d.prepare("SELECT 1 FROM topics WHERE week_id = ? AND status = 'ready'").get(weekId)) return
+      const w = d.prepare('SELECT w.label, c.name FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.id = ?').get(weekId) as { label: string; name: string } | undefined
+      if (!w || !autoPublishOn() || !isReady()) return
+      startJob('other', `Publish ${w.name} · ${w.label}`, () => publish(weekId))
+    }, AUTO_PUBLISH_DELAY_MS)
+  )
 }

@@ -82,6 +82,11 @@ export interface MarketStatus {
   hasKey: boolean
 }
 
+/** Settings: publish your weeks as their topics are written. */
+export const AUTO_PUBLISH_SETTING = 'market.autoPublish'
+/** Weeks that hold someone else's work (a shared or marketplace week went into them): never published automatically. */
+export const IMPORTED_WEEKS_SETTING = 'market.importedWeeks'
+
 export type MarketSort = 'recent' | 'popular'
 
 /** "alex", "alex and sam", "alex, sam and 3 others". */
