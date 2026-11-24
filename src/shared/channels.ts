@@ -85,6 +85,8 @@ export const CHANNELS = [
   'courses.suggestTrim',
   'courses.removeCards',
   'courses.setWeekRecall',
+  'courses.setVisibility',
+  'courses.setWeekVisibility',
   'courses.setExamDate',
   'market.status',
   'market.configure',

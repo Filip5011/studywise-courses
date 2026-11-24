@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { getSetting, setSetting } from '../db/repo'
 import { getSecret, setSecret } from '../secrets'
 import { getDb } from '../db'
-import { weekFingerprint } from './course'
+import { setCoursePrivate, setWeekPrivate, weekFingerprint } from './course'
 import { weekZip } from './weekShare'
 import { startJob, type JobContext } from '../jobs'
 import { AUTO_PUBLISH_SETTING, IMPORTED_WEEKS_SETTING, type MarketCourse, type MarketCourseFull, type MarketMatch, type MarketSort, type MarketStatus, type MarketWeek } from '@shared/market'
@@ -118,6 +118,20 @@ export async function mine(): Promise<(MarketWeek & { courseName: string })[]> {
 
 const published = () => getSetting<Record<string, string>>(PUBLISHED_SETTING, {})
 
+/** A week stays off the marketplace when it, or its course, is private. */
+export function isWeekPrivate(weekId: string): boolean {
+  const r = getDb().prepare('SELECT w.private wp, c.private cp FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.id = ?').get(weekId) as { wp: number; cp: number } | undefined
+  return !!r && (!!r.wp || !!r.cp)
+}
+
+/** Why a private week can't be published: which of the two is private. */
+function privateWhy(weekId: string): string {
+  const r = getDb().prepare('SELECT c.private cp FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.id = ?').get(weekId) as { cp: number } | undefined
+  return r?.cp
+    ? 'This course is private, so its weeks stay off the marketplace. Make the course public (its ⋯ menu) to publish them.'
+    : 'This week is private, so it stays off the marketplace. Make it public (its ⋯ menu) to publish it.'
+}
+
 /** Which of your weeks are on the marketplace: {localWeekId: remoteWeekId}. */
 export const publishedWeeks = published
 
@@ -128,6 +142,7 @@ export const publishedWeeks = published
 export async function publish(weekId: string): Promise<{ week: MarketWeek; replaced: boolean }> {
   const written = getDb().prepare("SELECT COUNT(*) n FROM topics WHERE week_id = ? AND status = 'ready'").get(weekId) as { n: number }
   if (!written.n) throw new Error('Write at least one of this week’s topics before publishing it.')
+  if (isWeekPrivate(weekId)) throw new Error(privateWhy(weekId))
   const { bytes } = await weekZip(weekId)
   const before = published()[weekId]
   const post = (replace?: string) =>
@@ -151,12 +166,13 @@ export async function publish(weekId: string): Promise<{ week: MarketWeek; repla
   return { week: r.week, replaced }
 }
 
-/** Weeks with at least one written topic, in course and week order: everything that can be published (or just one course's). */
+/** Public weeks with at least one written topic, in course and week order: everything that can be published (or just one course's). */
 export function publishableWeeks(courseId?: string): { weekId: string; course: string; label: string }[] {
   return getDb()
     .prepare(
       `SELECT w.id weekId, c.name course, w.label label FROM weeks w JOIN courses c ON c.id = w.course_id
-       WHERE EXISTS (SELECT 1 FROM topics t WHERE t.week_id = w.id AND t.status = 'ready') ${courseId ? 'AND c.id = ?' : ''}
+       WHERE w.private = 0 AND c.private = 0
+         AND EXISTS (SELECT 1 FROM topics t WHERE t.week_id = w.id AND t.status = 'ready') ${courseId ? 'AND c.id = ?' : ''}
        ORDER BY c.name COLLATE NOCASE, w.position`
     )
     .all(...(courseId ? [courseId] : [])) as { weekId: string; course: string; label: string }[]
@@ -186,6 +202,65 @@ export async function publishMany(weeks: { weekId: string; course: string; label
 export async function remove(remoteWeekId: string): Promise<void> {
   await request(`/api/weeks/${encodeURIComponent(remoteWeekId)}`, { method: 'DELETE' })
   setSetting(PUBLISHED_SETTING, Object.fromEntries(Object.entries(published()).filter(([, v]) => v !== remoteWeekId)))
+}
+
+/**
+ * Take down whichever of these weeks are on the marketplace. Not connected, or
+ * nothing published: nothing to do. One failing doesn't stop the rest.
+ */
+async function takeDown(weekIds: string[]): Promise<{ removed: number; failed: string[] }> {
+  const on = published()
+  const remote = weekIds.filter((w) => on[w]).map((w) => on[w])
+  const failed: string[] = []
+  let removed = 0
+  if (!remote.length || !isReady()) return { removed, failed: remote.length ? ['Not connected to the marketplace'] : [] }
+  for (const id of remote) {
+    try {
+      await remove(id)
+      removed++
+    } catch (e) {
+      // Already gone from the site: just forget it.
+      if (e instanceof MarketError && e.status === 404) {
+        setSetting(PUBLISHED_SETTING, Object.fromEntries(Object.entries(published()).filter(([, v]) => v !== id)))
+        removed++
+      } else failed.push((e as Error).message)
+    }
+  }
+  return { removed, failed }
+}
+
+export interface VisibilityResult {
+  /** Weeks taken down from the marketplace because they're now private. */
+  removed: number
+  /** Why some couldn't be taken down (they're still on the marketplace). */
+  failed: string[]
+}
+
+/** Make a week public or private. Going private takes it down if it's published. */
+export async function setWeekVisibility(weekId: string, isPrivate: boolean): Promise<VisibilityResult> {
+  setWeekPrivate(weekId, isPrivate)
+  if (isPrivate) {
+    clearTimeout(pending.get(weekId))
+    pending.delete(weekId)
+    return takeDown([weekId])
+  }
+  queueAutoPublish(weekId)
+  return { removed: 0, failed: [] }
+}
+
+/** Make a course public or private. Going private takes down every week of it that's published. */
+export async function setCourseVisibility(courseId: string, isPrivate: boolean): Promise<VisibilityResult> {
+  setCoursePrivate(courseId, isPrivate)
+  const weekIds = (getDb().prepare('SELECT id FROM weeks WHERE course_id = ?').all(courseId) as { id: string }[]).map((r) => r.id)
+  if (isPrivate) {
+    for (const w of weekIds) {
+      clearTimeout(pending.get(w))
+      pending.delete(w)
+    }
+    return takeDown(weekIds)
+  }
+  for (const w of weekIds) queueAutoPublish(w)
+  return { removed: 0, failed: [] }
 }
 
 /** Download a published week to a temporary .studyweek file, to import like a shared week. */
@@ -239,6 +314,7 @@ export const pendingAutoPublish = () => [...pending.keys()]
 export function queueAutoPublish(weekId: string): void {
   if (!autoPublishOn() || !isReady()) return
   if (getSetting<string[]>(IMPORTED_WEEKS_SETTING, []).includes(weekId)) return
+  if (isWeekPrivate(weekId)) return
   clearTimeout(pending.get(weekId))
   pending.set(
     weekId,
@@ -249,7 +325,7 @@ export function queueAutoPublish(weekId: string): void {
       if (d.prepare("SELECT 1 FROM topics WHERE week_id = ? AND status = 'writing'").get(weekId)) return
       if (!d.prepare("SELECT 1 FROM topics WHERE week_id = ? AND status = 'ready'").get(weekId)) return
       const w = d.prepare('SELECT w.label, c.name FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.id = ?').get(weekId) as { label: string; name: string } | undefined
-      if (!w || !autoPublishOn() || !isReady()) return
+      if (!w || !autoPublishOn() || !isReady() || isWeekPrivate(weekId)) return
       startJob('other', `Publish ${w.name} · ${w.label}`, () => publish(weekId))
     }, AUTO_PUBLISH_DELAY_MS)
   )

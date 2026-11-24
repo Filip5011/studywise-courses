@@ -377,15 +377,28 @@ export const handlers = {
     list: h(none, () => course.listCourses()),
     get: h(z.object({ id }), (i) => course.getCourse(i.id)),
     // Files are only added here; planning waits until you say so (courses.plan).
-    create: h(z.object({ name: z.string().min(1).max(200), level: z.string().max(200).default(''), weekLabel: z.string().max(100).default(''), files: z.array(z.string()).max(200).default([]), note: z.string().max(4000).default('') }), async (i) => {
+    // Public unless made private: private courses and weeks never go on the marketplace.
+    create: h(
+      z.object({
+        name: z.string().min(1).max(200),
+        level: z.string().max(200).default(''),
+        weekLabel: z.string().max(100).default(''),
+        files: z.array(z.string()).max(200).default([]),
+        note: z.string().max(4000).default(''),
+        private: z.boolean().default(false),
+        weekPrivate: z.boolean().optional()
+      }),
+      async (i) => {
       const c = course.createCourse(i)
       if (i.note.trim()) course.setCourseNote(c.id, i.note)
-      const w = course.addWeek(c.id, i.weekLabel)
+      const w = course.addWeek(c.id, i.weekLabel, { private: i.weekPrivate })
       if (i.files.length) await course.addFiles(w.id, i.files)
       return { ...course.getCourse(c.id), firstWeekId: w.id }
-    }),
-    addWeek: h(z.object({ courseId: id, label: z.string().max(100).default(''), files: z.array(z.string()).max(200).default([]) }), async (i) => {
-      const w = course.addWeek(i.courseId, i.label)
+      }
+    ),
+    /** No `private`: the week is like its course. */
+    addWeek: h(z.object({ courseId: id, label: z.string().max(100).default(''), files: z.array(z.string()).max(200).default([]), private: z.boolean().optional() }), async (i) => {
+      const w = course.addWeek(i.courseId, i.label, { private: i.private })
       if (i.files.length) await course.addFiles(w.id, i.files)
       return w
     }),
@@ -483,6 +496,9 @@ export const handlers = {
     removeCards: h(z.object({ cardIds: z.array(id).max(2000) }), (i) => course.removeTopicCards(i.cardIds)),
     /** Turn a week's recall on or off (its cards stay). */
     setWeekRecall: h(z.object({ weekId: id, on: z.boolean() }), (i) => course.setWeekRecall(i.weekId, i.on)),
+    /** Public or private on the marketplace. Going private takes down what's published. */
+    setVisibility: h(z.object({ courseId: id, private: z.boolean() }), (i) => market.setCourseVisibility(i.courseId, i.private)),
+    setWeekVisibility: h(z.object({ weekId: id, private: z.boolean() }), (i) => market.setWeekVisibility(i.weekId, i.private)),
     /** Set or clear a course's exam date (YYYY-MM-DD). */
     setExamDate: h(z.object({ courseId: id, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable() }), (i) => course.setExamDate(i.courseId, i.date))
   },

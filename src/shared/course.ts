@@ -195,6 +195,8 @@ export interface Week {
   deck_id: string | null
   /** Recall turned off: its cards stay, but don't come up in recall, course review or due counts. */
   recall_off: boolean
+  /** Never published to the marketplace. The week is also kept off it while its course is private. */
+  private: boolean
   created_at: string
 }
 
@@ -218,6 +220,8 @@ export interface Course {
   exam_date: string | null
   /** Your note to the AI about this course, added to every prompt for it ("this course is coding heavy…"). */
   note: string
+  /** None of its weeks are published to the marketplace, whatever each week is set to. */
+  private: boolean
   created_at: string
   updated_at: string
 }

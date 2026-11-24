@@ -171,3 +171,101 @@ describe('publishing automatically', () => {
     }
   })
 })
+
+describe('public and private', () => {
+  it('makes courses and weeks public unless you say otherwise, and a new week follows its course', () => {
+    const pub = svc.createCourse({ name: 'Visible 101', level: '' })
+    expect(pub.private).toBe(false)
+    expect(svc.addWeek(pub.id).private).toBe(false)
+    expect(svc.addWeek(pub.id, 'Mine only', { private: true }).private).toBe(true)
+
+    const priv = svc.createCourse({ name: 'Hidden 101', level: '', private: true })
+    expect(priv.private).toBe(true)
+    expect(svc.addWeek(priv.id).private).toBe(true)
+    expect(svc.getCourse(priv.id).private).toBe(true)
+    expect(svc.listCourses().find((c) => c.id === priv.id)?.private).toBe(true)
+  })
+
+  it('never publishes a private week, or any week of a private course, by hand, in bulk or automatically', async () => {
+    const market = await import('../../src/main/services/market')
+    const repo = await import('../../src/main/db/repo')
+    const { setSecret } = await import('../../src/main/secrets')
+    const course = svc.createCourse({ name: 'Private 101', level: '' })
+    const w = svc.addWeek(course.id)
+    await svc.addFiles(w.id, [PDF])
+    await svc.planWeek(w.id, ctx())
+    const [t1] = svc.listTopics(course.id)
+    await svc.writeTopic(t1.id, ctx())
+    const listed = () => market.publishableWeeks(course.id).map((x) => x.weekId)
+    expect(listed()).toEqual([w.id])
+
+    repo.setSetting('market.autoPublish', true)
+    repo.setSetting('market.url', 'http://localhost:1')
+    setSecret('secret.marketKey', 'swm_test')
+    vi.useFakeTimers()
+    try {
+      // The week private.
+      await market.setWeekVisibility(w.id, true)
+      expect(market.isWeekPrivate(w.id)).toBe(true)
+      expect(listed()).toEqual([])
+      market.queueAutoPublish(w.id)
+      expect(market.pendingAutoPublish()).toEqual([])
+      await expect(market.publish(w.id)).rejects.toThrow(/week is private/)
+
+      // Public again: with automatic publishing on, it's queued.
+      await market.setWeekVisibility(w.id, false)
+      expect(market.pendingAutoPublish()).toEqual([w.id])
+
+      // The course private: the week is too, whatever it's set to, and the queued publish is dropped.
+      await market.setCourseVisibility(course.id, true)
+      expect(market.pendingAutoPublish()).toEqual([])
+      expect(svc.getCourse(course.id).weeks[0].private).toBe(false)
+      expect(market.isWeekPrivate(w.id)).toBe(true)
+      expect(listed()).toEqual([])
+      await expect(market.publish(w.id)).rejects.toThrow(/course is private/)
+
+      await market.setCourseVisibility(course.id, false)
+      expect(listed()).toEqual([w.id])
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      repo.setSetting('market.autoPublish', false)
+      setSecret('secret.marketKey', null)
+    }
+  })
+
+  it('takes a published week down when it goes private', async () => {
+    const market = await import('../../src/main/services/market')
+    const repo = await import('../../src/main/db/repo')
+    const { setSecret } = await import('../../src/main/secrets')
+    const course = svc.createCourse({ name: 'Takedown 101', level: '' })
+    const w = svc.addWeek(course.id)
+    repo.setSetting('market.published', { [w.id]: 'remote-1' })
+    repo.setSetting('market.url', 'https://market.test')
+    setSecret('secret.marketKey', 'swm_test')
+    const calls: string[] = []
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      calls.push(`${init?.method ?? 'GET'} ${String(url)}`)
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    try {
+      const r = await market.setCourseVisibility(course.id, true)
+      expect(r).toEqual({ removed: 1, failed: [] })
+      expect(calls).toEqual(['DELETE https://market.test/api/weeks/remote-1'])
+      expect(market.publishedWeeks()[w.id]).toBeUndefined()
+      // Nothing published any more: nothing to take down.
+      expect(await market.setWeekVisibility(w.id, true)).toEqual({ removed: 0, failed: [] })
+      expect(calls).toHaveLength(1)
+    } finally {
+      fetchMock.mockRestore()
+      setSecret('secret.marketKey', null)
+    }
+  })
+
+  it('leaves whether a week is private out of the shared file', async () => {
+    const course = svc.createCourse({ name: 'Share 101', level: '' })
+    const w = svc.addWeek(course.id, 'Week 1', { private: true })
+    const { json } = await share.weekZip(w.id)
+    expect('private' in JSON.parse(JSON.stringify(json.week))).toBe(false)
+  })
+})

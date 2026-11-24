@@ -1,4 +1,4 @@
-import { modelLabel, type MarketMatch, type MarketModel, type MarketWeek } from '@shared/market'
+import { AUTO_PUBLISH_SETTING, modelLabel, type MarketMatch, type MarketModel, type MarketWeek } from '@shared/market'
 import { api, errorText } from './api'
 import { confirmDialog } from './dialogs'
 import { importSharedWeek } from './weekShare'
@@ -62,6 +62,54 @@ export async function publishToMarket(week: { id: string; label: string }): Prom
   }
 }
 
+/** What changing visibility did, as a toast. */
+async function visibilityToast(name: string, isPrivate: boolean, r: { removed: number; failed: string[] }): Promise<void> {
+  if (isPrivate) {
+    if (r.failed.length) toast(`${name} is private, but ${r.failed.length === 1 ? 'a week' : `${r.failed.length} weeks`} couldn’t be taken down from the marketplace: ${r.failed[0]} Take ${r.failed.length === 1 ? 'it' : 'them'} down from Marketplace → Published by you.`, 'bad')
+    else toast(`${name} is private${r.removed ? `, and ${plural(r.removed, 'week')} ${r.removed === 1 ? 'was' : 'were'} taken down from the marketplace` : ''}. It won’t be published.`, 'good')
+    return
+  }
+  const auto = (await api.settings.all().catch(() => ({}) as Record<string, unknown>))[AUTO_PUBLISH_SETTING] === true
+  toast(auto ? `${name} is public. Written weeks are published automatically.` : `${name} is public. Publish it from its ⋯ menu when you’re ready.`, 'good')
+}
+
+/** Make a course public or private. Private takes its published weeks down from the marketplace. */
+export async function setCourseVisibility(course: { id: string; name: string }, isPrivate: boolean): Promise<boolean> {
+  try {
+    if (isPrivate) {
+      const on = await api.market.published().catch(() => ({}) as Record<string, string>)
+      const c = await api.courses.get({ id: course.id })
+      const up = c.weeks.filter((w) => on[w.id]).length
+      if (up && !(await confirmDialog(`Make ${course.name} private?`, `${plural(up, 'week')} of it ${up === 1 ? 'is' : 'are'} on the marketplace and will be taken down. Nobody can add ${up === 1 ? 'it' : 'them'} after that, but anyone who already has ${up === 1 ? 'it' : 'them'} keeps their copy.`, { confirmText: 'Make private', danger: true })))
+        return false
+    }
+    const r = await api.courses.setVisibility({ courseId: course.id, private: isPrivate })
+    useStore.getState().bump()
+    await visibilityToast(course.name, isPrivate, r)
+    return true
+  } catch (e) {
+    toast(errorText(e), 'bad')
+    return false
+  }
+}
+
+/** Make a week public or private. Private takes it down from the marketplace if it's there. */
+export async function setWeekVisibility(week: { id: string; label: string }, isPrivate: boolean): Promise<boolean> {
+  try {
+    if (isPrivate && (await api.market.published().catch(() => ({}) as Record<string, string>))[week.id]) {
+      const ok = await confirmDialog(`Make ${week.label} private?`, 'It’s on the marketplace and will be taken down. Nobody can add it after that, but anyone who already has it keeps their copy.', { confirmText: 'Make private', danger: true })
+      if (!ok) return false
+    }
+    const r = await api.courses.setWeekVisibility({ weekId: week.id, private: isPrivate })
+    useStore.getState().bump()
+    await visibilityToast(week.label, isPrivate, r)
+    return true
+  } catch (e) {
+    toast(errorText(e), 'bad')
+    return false
+  }
+}
+
 /**
  * Publish every week you've written something in (or one course's), as a job.
  * Weeks already on the marketplace are replaced with what you have now.
@@ -76,7 +124,7 @@ export async function publishAllToMarket(courseId?: string): Promise<boolean> {
     }
     const weeks = await api.market.publishable(courseId ? { courseId } : undefined)
     if (!weeks.length) {
-      toast('There’s nothing to publish yet: write some topics first.', 'info')
+      toast('There’s nothing to publish: write some topics first, and only public courses and weeks are published.', 'info')
       return false
     }
     const courses = [...new Set(weeks.map((w) => w.course))]
