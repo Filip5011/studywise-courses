@@ -100,11 +100,53 @@ export async function publishAllToMarket(courseId?: string): Promise<boolean> {
  * that week of what looks like the same course, offer theirs.
  */
 export async function offerMarketWeek(week: { id: string; label: string }): Promise<void> {
-  const matches = await api.market.similar({ weekId: week.id }).catch(() => [])
-  if (!matches.length) return
+  const matches = await marketMatches(week.id, true)
+  if (matches.length) await chooseMarketWeek(week, matches)
+}
+
+// What the marketplace has for each blank week, kept for a few minutes so the
+// course and week pages don't ask again on every visit.
+const FRESH_MS = 5 * 60_000
+const found = new Map<string, { at: number; matches: Promise<MarketMatch[]> }>()
+/** Weeks you answered "I'll make it myself" for, this session: no banner for them. */
+const declined = new Set<string>()
+
+/** Published weeks someone else already made of this week (none when not connected). */
+export function marketMatches(weekId: string, fresh = false): Promise<MarketMatch[]> {
+  const f = found.get(weekId)
+  if (!fresh && f && Date.now() - f.at < FRESH_MS) return f.matches
+  const matches = api.market.similar({ weekId }).catch(() => [] as MarketMatch[])
+  found.set(weekId, { at: Date.now(), matches })
+  return matches
+}
+
+export const declinedMarketWeek = (weekId: string) => declined.has(weekId)
+
+/** Show what's been made of this week and, if you pick one, fill the week with it. True when it did. */
+export async function chooseMarketWeek(week: { id: string; label: string }, matches: MarketMatch[]): Promise<boolean> {
   const { askAboutMatches } = await import('../components/MarketMatches')
   const a = await askAboutMatches(week.label, matches, { planning: false })
-  if (a && a !== 'plan') await useMarketWeekHere(a.use, week)
+  if (a === 'plan') declined.add(week.id)
+  if (!a || a === 'plan') return false
+  found.delete(week.id)
+  return useMarketWeekHere(a.use, week)
+}
+
+/** From a week's ⋯ menu: look now, and say so when nobody has made it. */
+export async function findMarketWeek(week: { id: string; label: string }): Promise<boolean> {
+  const status = await api.market.status().catch(() => null)
+  if (!status?.url || !status.hasKey) {
+    toast('Connect to a marketplace first: add its address and your API key here.', 'info')
+    useStore.getState().go({ name: 'settings', tab: 'market' })
+    return false
+  }
+  const matches = await marketMatches(week.id, true)
+  if (!matches.length) {
+    toast(`Nobody has published ${week.label} of this course yet.`, 'info')
+    return false
+  }
+  declined.delete(week.id)
+  return chooseMarketWeek(week, matches)
 }
 
 export const matchPercent = (m: MarketMatch) => `${Math.round(m.score * 100)}%`

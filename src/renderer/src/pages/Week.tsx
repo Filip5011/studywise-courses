@@ -24,6 +24,7 @@ import {
   RotateCcw,
   Share2,
   Store,
+  Search,
   Sparkles,
   Trash2,
   Upload,
@@ -33,7 +34,8 @@ import { NOTE_LEVEL_INFO, type CourseFile, type CourseFull, type Topic, type Wee
 import { offerPlan, switchLevel, writeTopics } from '../lib/courseFlows'
 import { planUsageText, type JobInfo } from '@shared/types'
 import { shareWeek } from '../lib/weekShare'
-import { publishToMarket } from '../lib/market'
+import { chooseMarketWeek, declinedMarketWeek, findMarketWeek, marketMatches, modelsText, publishToMarket } from '../lib/market'
+import type { MarketMatch } from '@shared/market'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
 import { askText, confirmDialog } from '../lib/dialogs'
@@ -93,6 +95,22 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
   const nextUp = w.topics.find((t) => t.status === 'ready' && !t.progress.done)
   // Trimming recall cards: the whole week, or one topic.
   const [trim, setTrim] = useState<{ topicId?: string; title: string } | null>(null)
+  // A blank week someone has already published: offered on the page.
+  const blank = !w.topics.length && !planning
+  const [made, setMade] = useState<MarketMatch[]>([])
+  useEffect(() => {
+    setMade([])
+    if (!blank || declinedMarketWeek(w.id)) return
+    let live = true
+    void marketMatches(w.id).then((m) => live && setMade(m))
+    return () => {
+      live = false
+    }
+  }, [w.id, blank, w.files.length])
+  const takeMade = async () => {
+    if (await chooseMarketWeek(w, made)) reload()
+    else if (declinedMarketWeek(w.id)) setMade([])
+  }
   const toggleRecall = async () => {
     try {
       await api.courses.setWeekRecall({ weekId: w.id, on: w.recall_off })
@@ -198,6 +216,11 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
                   <MenuItem icon={<Share2 className="size-4" />} onClick={() => (close(), void shareWeek(w.id))}>
                     Share this week…
                   </MenuItem>
+                  {blank && (
+                    <MenuItem icon={<Search className="size-4" />} onClick={() => (close(), void findMarketWeek(w).then((ok) => ok && reload()))}>
+                      Find on marketplace…
+                    </MenuItem>
+                  )}
                   {w.topics.some((t) => t.status === 'ready') && (
                     <MenuItem desktopOnly icon={<Store className="size-4" />} onClick={() => (close(), void publishToMarket(w))}>
                       Publish to marketplace…
@@ -270,6 +293,21 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
                 <TopicRow key={t.id} t={t} write={write} saveNote={saveNote} reload={reload} onTrim={() => setTrim({ topicId: t.id, title: t.content?.title ?? t.plan.title })} />
               ))}
             </ol>
+          )}
+          {blank && made.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-accent/30 bg-accent-soft px-5 py-4">
+              <Store className="size-5 shrink-0 text-accent" />
+              <div className="min-w-0 flex-1 text-[0.92rem]">
+                <div className="font-semibold">Someone has already made {w.label}</div>
+                <div className="text-muted">
+                  {made[0].course.name} · {made[0].week.label} by {made[0].week.author}: {made[0].week.writtenCount} of {made[0].week.topicCount} topics written{made[0].week.writtenWith.length ? `, with ${modelsText(made[0].week.writtenWith)}` : ''}.
+                  {made.length > 1 ? ` And ${made.length - 1} more.` : ''} Adding it costs no tokens.
+                </div>
+              </div>
+              <Button size="sm" variant="ink" onClick={takeMade}>
+                Use this week…
+              </Button>
+            </div>
           )}
           {!planning && !w.topics.length && w.status !== 'error' && (
             <p className="rounded-xl border border-dashed border-line px-5 py-6 text-center text-[0.92rem] text-muted">

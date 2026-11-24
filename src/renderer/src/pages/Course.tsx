@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff, CalendarDays, Scissors, StickyNote, Store } from 'lucide-react'
 import { offerPlan, writeTopics } from '../lib/courseFlows'
 import { importSharedWeek } from '../lib/weekShare'
-import { offerMarketWeek, publishAllToMarket } from '../lib/market'
+import { declinedMarketWeek, marketMatches, offerMarketWeek, publishAllToMarket } from '../lib/market'
 import { TrimCardsModal } from '../components/TrimCards'
 import { examPhase, revisionMaxGapDays, type CourseFull, type WeekFull } from '@shared/course'
 import { useStore, toast } from '../lib/store'
@@ -31,6 +31,7 @@ export function CoursePage({ id }: { id: string }) {
       .then(setC)
       .catch((e) => setError(errorText(e)))
   useEffect(() => void load(), [id, version])
+  const made = useMadeWeeks(c)
 
   if (error)
     return (
@@ -158,7 +159,7 @@ export function CoursePage({ id }: { id: string }) {
       {c.weeks.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
           {c.weeks.map((w) => (
-            <WeekRow key={w.id} c={c} w={w} />
+            <WeekRow key={w.id} c={c} w={w} made={made.has(w.id)} />
           ))}
         </ul>
       )}
@@ -369,7 +370,23 @@ function ExamDateModal({ courseId, date, onClose }: { courseId: string; date: st
   )
 }
 
-function WeekRow({ c, w }: { c: CourseFull; w: WeekFull }) {
+/** Blank weeks (no topics) that someone has already published on the marketplace. */
+function useMadeWeeks(c: CourseFull | null): Set<string> {
+  const [made, setMade] = useState<Set<string>>(new Set())
+  const blank = (c?.weeks ?? []).filter((w) => !w.topics.length && w.status !== 'planning' && !declinedMarketWeek(w.id)).map((w) => w.id)
+  const key = blank.join(',')
+  useEffect(() => {
+    let live = true
+    void Promise.all(blank.map(async (id) => ((await marketMatches(id)).length ? id : null))).then((ids) => live && setMade(new Set(ids.filter((x): x is string => !!x))))
+    return () => {
+      live = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key])
+  return made
+}
+
+function WeekRow({ c, w, made }: { c: CourseFull; w: WeekFull; made: boolean }) {
   const go = useStore((s) => s.go)
   const jobs = useStore((s) => s.jobs)
   const planning = w.status === 'planning' || !!runningJob(jobs, 'course_outline', 'weekId', w.id)
@@ -412,6 +429,13 @@ function WeekRow({ c, w }: { c: CourseFull; w: WeekFull }) {
             )}
             {status && (
               <Pill tone={status.tone === 'muted' ? 'neutral' : status.tone}>{status.text}</Pill>
+            )}
+            {made && (
+              <span className="shrink-0" title="Someone has already published this week on the marketplace. Open it to add theirs, at no cost.">
+                <Pill tone="accent">
+                  <Store className="size-3" /> Already made
+                </Pill>
+              </span>
             )}
           </div>
           <div className="mt-0.5 truncate text-[0.88rem] text-muted">{facts.join(' · ')}</div>
