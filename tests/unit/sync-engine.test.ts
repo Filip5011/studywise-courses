@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import Database from 'better-sqlite3'
-import { migrate } from '../../src/main/db/migrations'
+import { MIGRATIONS, migrate } from '../../src/main/db/migrations'
 import { applyChanges, changesSince, deviceId, ensureBackfill, syncWith, type SqlDb } from '../../src/main/sync/engine'
 
 const T = '2026-01-01T00:00:00.000Z'
@@ -141,5 +141,63 @@ describe('sync engine', () => {
     phone.prepare(`UPDATE topics SET progress = '{"section":2}' WHERE id = 't1'`).run()
     await sync()
     expect(desktop.prepare("SELECT progress FROM topics WHERE id = 't1'").get()).toEqual({ progress: '{"section":2}' })
+  })
+
+  it('keeps an edit made after syncing even when that device’s clock is behind', async () => {
+    const desktop = open()
+    const phone = open()
+    const sync = pair(desktop, phone)
+    addDeck(desktop, 'd1')
+    addCard(desktop, 'c1', 'd1', 'from the computer')
+    // The computer's clock is an hour ahead of the phone's.
+    const ahead = new Date(Date.now() + 3600_000).toISOString()
+    desktop.prepare("UPDATE sync_log SET at = ? WHERE tbl = 'cards' AND pk = 'c1'").run(ahead)
+    await sync()
+    expect(fronts(phone)).toEqual(['c1:from the computer'])
+    // The phone, having seen that version, changes it: its change is the newer one.
+    phone.prepare("UPDATE cards SET front = 'from the phone' WHERE id = 'c1'").run()
+    const logged = (phone.prepare("SELECT at FROM sync_log WHERE tbl = 'cards' AND pk = 'c1'").get() as { at: string }).at
+    expect(logged > ahead).toBe(true)
+    await sync()
+    expect(fronts(desktop)).toEqual(['c1:from the phone'])
+    expect(fronts(phone)).toEqual(['c1:from the phone'])
+  })
+
+  it('gives a library from before the fix the new triggers', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    // A library as version 1.8.2 left it (migrations up to 10), with the triggers
+    // as they were then: a change's time was just "now".
+    const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+    const old = (m: string) => m.split(`MAX(${NOW}, COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', julianday(at) + 0.0015 / 86400.0), ''))`).join(NOW)
+    for (const [i, m] of MIGRATIONS.slice(0, 10).entries()) {
+      db.exec(old(m))
+      db.pragma(`user_version = ${i + 1}`)
+    }
+    const triggers = () => db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_%'").all() as { name: string; sql: string }[]
+    const before = triggers()
+    expect(before.some((t) => t.sql.includes('julianday'))).toBe(false)
+    migrate(db)
+    const after = triggers()
+    expect(after.map((t) => t.name).sort()).toEqual(before.map((t) => t.name).sort())
+    expect(after.filter((t) => t.name.endsWith('_upd') || t.name.endsWith('_del')).every((t) => t.sql.includes('julianday'))).toBe(true)
+    // Still records writes.
+    addDeck(db, 'd1')
+    expect(db.prepare("SELECT COUNT(*) n FROM sync_log WHERE tbl = 'decks'").get()).toEqual({ n: 1 })
+  })
+
+  it('still settles edits made without seeing each other by which came later', async () => {
+    const desktop = open()
+    const phone = open()
+    const sync = pair(desktop, phone)
+    addDeck(desktop, 'd1')
+    addCard(desktop, 'c1', 'd1')
+    await sync()
+    phone.prepare("UPDATE cards SET front = 'phone' WHERE id = 'c1'").run()
+    await sleep(5)
+    desktop.prepare("UPDATE cards SET front = 'computer' WHERE id = 'c1'").run()
+    await sync()
+    expect(fronts(desktop)).toEqual(['c1:computer'])
+    expect(fronts(phone)).toEqual(['c1:computer'])
   })
 })

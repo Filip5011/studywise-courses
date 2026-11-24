@@ -270,6 +270,10 @@ export const MIGRATIONS: string[] = [
   /* 10: which model and effort planned each week and wrote each level of a topic (shown on the marketplace) */ `
   ALTER TABLE weeks ADD COLUMN planned_with TEXT;
   ALTER TABLE topics ADD COLUMN written_with TEXT NOT NULL DEFAULT '{}';
+  `,
+  /* 11: a change is always logged as later than the version it replaced (a phone a little behind the computer's clock lost edits) */ `
+  ${SYNC_TABLES.flatMap((t) => ['ins', 'upd', 'del'].map((k) => `DROP TRIGGER IF EXISTS sync_${t.name}_${k};`)).join('\n  ')}
+  ${syncTriggersSql(SYNC_TABLES)}
   `
 ]
 
