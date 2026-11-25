@@ -15,7 +15,10 @@ module.exports = {
   productName: 'Studywise Courses',
   copyright: 'Studywise',
   directories: { output: 'release', buildResources: 'build' },
-  files: ['out/**/*', 'resources/**/*', 'package.json', '!**/*.map'],
+  // Capacitor is only for the phone app (its code is bundled into the mobile
+  // build). Shipping it put its Android build output in app.asar.unpacked, with
+  // paths too long for the Windows uninstaller (see build/installer.nsh).
+  files: ['out/**/*', 'resources/**/*', 'package.json', '!**/*.map', '!node_modules/@capacitor/**'],
   asarUnpack: ['resources/**', '**/*.node'],
   // better-sqlite3 ships Node-API prebuilds for every platform, so nothing needs compiling.
   npmRebuild: false,
@@ -55,6 +58,8 @@ module.exports = {
     artifactName: 'Studywise-Courses-win-${arch}.${ext}'
   },
   nsis: {
+    // Clears paths too long for an old version's uninstaller before it runs.
+    include: 'build/installer.nsh',
     // Running the installer again updates in place: same appId, so it replaces
     // the old version (in whatever folder it was installed to) and leaves
     // %APPDATA%\Studywise Courses alone, even when the old version's
