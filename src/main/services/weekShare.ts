@@ -57,11 +57,36 @@ const zipPath = (p: string) => p.split(sep).join('/')
 export const weekFileName = (course: string, week: string) => `${safeFileName(`${course} - ${week}`)}.${WEEK_EXT}`
 export const isWeekFile = (f: string) => basename(f).toLowerCase().endsWith(`.${WEEK_EXT}`)
 
+/**
+ * Which sections were added later ("Add new notes") is about your own studying,
+ * like your progress: someone you share the week with gets them as ordinary
+ * sections.
+ */
+function withoutAdded<T>(content: T): T {
+  const c = content as { sections?: Record<string, unknown>[] } | null
+  if (!c || !Array.isArray(c.sections)) return content
+  return { ...c, sections: c.sections.map(({ added: _a, ...s }) => s) } as T
+}
+const jsonWithoutAdded = (text: unknown, key?: 'plan') => {
+  if (typeof text !== 'string') return text
+  try {
+    const v = JSON.parse(text) as Record<string, unknown> | null
+    if (!v) return text
+    if (key === 'plan') {
+      const { added: _a, ...plan } = v
+      return JSON.stringify(plan)
+    }
+    return JSON.stringify(withoutAdded(v))
+  } catch {
+    return text
+  }
+}
+
 /** A topic's other levels (topics.versions) with the progress taken out. */
 function noProgress(versions: unknown): string {
   try {
     const v = JSON.parse(typeof versions === 'string' ? versions : '{}') as Record<string, { content: unknown; progress?: unknown }>
-    return JSON.stringify(Object.fromEntries(Object.entries(v).map(([k, x]) => [k, { content: x.content, progress: {} }])))
+    return JSON.stringify(Object.fromEntries(Object.entries(v).map(([k, x]) => [k, { content: withoutAdded(x.content), progress: {} }])))
   } catch {
     return '{}'
   }
@@ -84,7 +109,7 @@ function weekRows(weekId: string) {
   const files = (d.prepare('SELECT * FROM course_files WHERE week_id = ? ORDER BY position').all(weekId) as Row[]).map((f): Row & { path: string } => ({ ...f, path: zipPath(relative(courseDir, String(f.path))) }))
   // Your progress and the link to your own copy of the notes stay with you.
   // Every level of detail a topic is written at goes, without your progress on it.
-  const topics = (d.prepare('SELECT * FROM topics WHERE week_id = ? ORDER BY position').all(weekId) as Row[]).map((t) => ({ ...t, progress: '{}', note_id: null, versions: noProgress(t.versions) }))
+  const topics = (d.prepare('SELECT * FROM topics WHERE week_id = ? ORDER BY position').all(weekId) as Row[]).map((t) => ({ ...t, progress: '{}', note_id: null, versions: noProgress(t.versions), content: jsonWithoutAdded(t.content), plan: jsonWithoutAdded(t.plan, 'plan') }))
   const cards = week.deck_id ? (d.prepare('SELECT * FROM cards WHERE deck_id = ? ORDER BY id').all(week.deck_id) as Row[]) : []
   return { week, course, courseDir, files, topics, cards }
 }

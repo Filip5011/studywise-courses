@@ -35,6 +35,8 @@ import {
   type CourseFile,
   type CourseFull,
   type CourseMarkOut,
+  type CourseUpdate,
+  type CourseExtendOut,
   type CourseTrimOut,
   type CourseOutline,
   type CourseQuestion,
@@ -44,6 +46,7 @@ import {
   type NoteLevel,
   type Topic,
   type TopicContent,
+  type TopicSection,
   type TopicProgress,
   type TopicVersion,
   type Week,
@@ -223,7 +226,7 @@ function topicRow(id: string): TopicRow {
   return r
 }
 
-function setTopic(id: string, patch: { status?: string; error?: string | null; content?: string | null; progress?: string; level?: NoteLevel; versions?: string; written_with?: string }): void {
+function setTopic(id: string, patch: { status?: string; error?: string | null; content?: string | null; progress?: string; level?: NoteLevel; versions?: string; written_with?: string; plan?: string }): void {
   const sets = Object.keys(patch).map((k) => `${k} = @${k}`)
   getDb().prepare(`UPDATE topics SET ${[...sets, 'updated_at = @updated_at'].join(', ')} WHERE id = @id`).run({ ...patch, updated_at: now(), id })
 }
@@ -955,6 +958,15 @@ export function levelInstructions(level: NoteLevel): string {
 - Where the material is technical, show the reasoning or derivation rather than just the result.
 - 3–4 questions per section. The topic check and the recall cards follow the usual rules.
 - Still only teach what's in the material.`
+  if (level === 'simple')
+    return `LEVEL OF DETAIL: EXPLAIN IT LIKE I'M 12. Explain this topic so a bright 12-year-old would really understand it, while still covering what I need for the exam. Simple, easy to review, and it has to click.
+- Everyday words and short sentences (mostly under 15 words). No jargon until it's needed; when a technical term comes up, first say what it means in plain words with something from everyday life, then give the proper term in bold.
+- Every idea gets a simple, concrete example from ordinary life (school, games, cooking, sport, phones, shops), and an analogy where it helps ("It's like…"). Then link the example back to the real thing in one line ("So in a computer, …").
+- One small step at a time. Each section teaches one idea in about 60–140 words, then ends with "**In one line:**" and the whole idea in a single simple sentence.
+- Where something has steps, number them, one short line each. Where two things get mixed up, a tiny "A vs B" table with plain words.
+- After the tricky ideas, add a "**Quick check:**" line asking me something simple to think about, with the answer straight after in brackets.
+- Still cover every examinable point, definition and formula from the sources: say it simply, don't drop it. Keep the exact wording of any formal definition the exam might test, after the simple version, with "Remember:" before it.
+- 2–3 questions per section, written in the same simple language. The topic check and the recall cards follow the usual rules, but keep their wording plain too.`
   return ''
 }
 
@@ -992,7 +1004,7 @@ async function writeTopicLevel(topicId: string, ctx: JobContext, instructions: s
   setTopic(topicId, { status: 'writing', error: null })
   const work = mkdtempSync(join(tmpdir(), 'studywise-topic-'))
   const live = ctx.live ?? (() => {})
-  const levelName = NOTE_LEVEL_INFO[level].label.toLowerCase()
+  const levelName = NOTE_LEVEL_INFO[level].inline
   try {
     ctx.progress('Gathering this topic’s sources…')
     live({ stage: 'Picking out this topic’s pages…', percent: 0.02 })
@@ -1111,7 +1123,7 @@ export async function setTopicLevel(topicId: string, level: NoteLevel): Promise<
   if (cur === level && row.content) return getTopic(topicId)
   const versions = rowVersions(row)
   const v = versions[level]
-  if (!v) throw new Error(`This topic hasn’t been written as ${NOTE_LEVEL_INFO[level].label.toLowerCase()} yet.`)
+  if (!v) throw new Error(`This topic hasn’t been written as ${NOTE_LEVEL_INFO[level].inline} yet.`)
   if (row.content) versions[cur] = { content: json<TopicContent>(row.content, null as unknown as TopicContent), progress: { ...emptyProgress(), ...json<Partial<TopicProgress>>(row.progress, {}) } }
   delete versions[level]
   setTopic(topicId, { content: JSON.stringify(v.content), progress: JSON.stringify({ ...emptyProgress(), ...v.progress }), level, versions: JSON.stringify(versions) })
@@ -1131,6 +1143,206 @@ function editAllLevels(topicId: string, fn: (c: TopicContent) => void): void {
   const versions = rowVersions(row)
   for (const v of Object.values(versions)) if (v) fn(v.content)
   getDb().prepare('UPDATE topics SET content = ?, versions = ?, updated_at = ? WHERE id = ?').run(content ? JSON.stringify(content) : row.content, JSON.stringify(versions), now(), topicId)
+}
+
+// ---------------------------------------------------------------------------
+// 3. Add new notes to a week that's already planned
+//
+// New material (files, or notes you paste) is compared with what the week
+// already teaches. Whatever's new goes where it belongs: new sections at the
+// end of an existing topic, or a new topic. Sections you may already have
+// studied are never touched: a written topic gets only the new sections,
+// written to fit after its own (at every level it's written at), marked with
+// when they were added. A finished topic is opened up again at the first new
+// section, so you can tell what you've reviewed from what's new.
+
+const EXISTING_NOTES_CHARS = 30_000
+
+export async function addNotesToWeek(weekId: string, newFileIds: string[], ctx: JobContext, instructions = ''): Promise<{ sections: number; updated: number; topics: number; summary: string }> {
+  const week = toWeek(weekRow(weekId))
+  const course = courseRow(week.course_id)
+  ctx.meta({ weekId, courseId: course.id })
+  const d = getDb()
+  if (d.prepare("SELECT 1 FROM topics WHERE week_id = ? AND status = 'writing'").get(weekId)) throw new Error('Wait for this week’s topics to finish writing first.')
+  const fresh = listFiles(course.id).filter((f) => f.week_id === weekId && newFileIds.includes(f.id))
+  if (!fresh.length) throw new Error('None of those can be added to a week.')
+  const topics = listTopics(course.id).filter((t) => t.week_id === weekId)
+  if (!topics.length) throw new Error(`Plan ${week.label} first: there are no topics to add to yet.`)
+  const live = ctx.live ?? (() => {})
+
+  ctx.progress('Reading the new notes…')
+  live({ stage: 'Reading the new notes…', percent: 0.02 })
+  const texts: { file: CourseFile; text: string | null }[] = []
+  for (const f of fresh) texts.push({ file: f, text: await fileText(f).catch(() => null) })
+  const attach = texts.filter((t) => t.text === null && (t.file.name.toLowerCase().endsWith('.pdf') || isImageFile(t.file.name))).map((t) => t.file.path)
+  const perFile = Math.floor(ONE_CALL_CHARS / Math.max(1, texts.filter((t) => t.text).length))
+  const source = texts.filter((t) => t.text !== null).map((t) => fileBlock(t.file.name, t.text!.slice(0, perFile))).join('\n\n')
+  const current = topics.map((t) => ({
+    id: t.key,
+    title: t.content?.title ?? t.plan.title,
+    goal: t.content?.goal ?? t.plan.goal,
+    written: t.status === 'ready',
+    sections: t.content ? t.content.sections.map((s) => s.heading) : t.plan.sections
+  }))
+
+  ctx.progress(`Comparing the new notes with ${week.label}…`)
+  live({ stage: `Comparing the new notes with ${week.label}…`, percent: 0.08, log: fresh.map((f) => `Read ${f.name}`) })
+  const r = await runAI<CourseUpdate>({
+    task: 'course_update',
+    vars: {
+      module: course.module || course.name,
+      level: course.level,
+      week: week.label,
+      topics: JSON.stringify(current, null, 1),
+      files: fresh.map((f) => `${f.name}${f.pages ? ` (${f.pages} pages)` : ''}`).join(', '),
+      source_text: source,
+      instructions: priorityInstructions(instructions)
+    },
+    files: attach.length ? attach : undefined,
+    deckId: ensureWeekDeck(weekId),
+    signal: ctx.signal
+  })
+
+  const stamp = now()
+  const byKey = new Map(topics.map((t) => [t.key, t]))
+  // One entry per topic, only real topics, only new headings.
+  const merged = new Map<string, CourseUpdate['updates'][number]>()
+  for (const u of r.data.updates) {
+    const t = byKey.get(u.topic)
+    if (!t) continue
+    const have = new Set((t.content ? t.content.sections.map((s) => s.heading) : t.plan.sections).map((h) => h.trim().toLowerCase()))
+    const sections = u.sections.map((h) => h.trim()).filter((h) => h && !have.has(h.toLowerCase()))
+    if (!sections.length) continue
+    const cur = merged.get(u.topic)
+    merged.set(u.topic, cur ? { ...cur, sections: [...cur.sections, ...sections], sources: [...cur.sources, ...u.sources], stressed: [...cur.stressed, ...u.stressed] } : { ...u, sections })
+  }
+  const updates = [...merged.values()]
+
+  // New topics: planned, at the end of the week, numbered on from its own.
+  const numbers = topics.map((t) => Number(t.key.match(/t(\d+)$/)?.[1] ?? 0))
+  let n = Math.max(0, ...numbers)
+  let pos = Math.max(0, ...topics.map((t) => t.position)) + 1
+  const localIds = new Map<string, string>()
+  const newTopics = r.data.topics.filter((t) => t.title.trim() && t.sections.length)
+  for (const t of newTopics) localIds.set(t.id, keyFor(week, `t${++n}`))
+  const rekey = (id: string) => localIds.get(id) ?? (/^t\d+$/.test(id) ? keyFor(week, id) : id)
+  const ins = d.prepare("INSERT INTO topics (id, course_id, week_id, key, position, plan, status, error, content, progress, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'planned', NULL, NULL, '{}', ?)")
+  for (const t of newTopics) ins.run(uid(), course.id, weekId, localIds.get(t.id)!, pos++, JSON.stringify({ ...t, id: localIds.get(t.id)!, needs: t.needs.map(rekey), added: stamp }), now())
+
+  // Topics not written yet just plan the new sections: they'll be in it when it's written.
+  for (const u of updates.filter((x) => byKey.get(x.topic)!.status !== 'ready')) {
+    const t = byKey.get(u.topic)!
+    setTopic(t.id, { plan: JSON.stringify({ ...t.plan, sections: [...t.plan.sections, ...u.sections], sources: [...t.plan.sources, ...u.sources], stressed: [...t.plan.stressed, ...u.stressed] }) })
+  }
+
+  // Written topics get just the new sections.
+  const written = updates.filter((x) => byKey.get(x.topic)!.status === 'ready')
+  let sections = 0
+  for (const [i, u] of written.entries()) {
+    const t = byKey.get(u.topic)!
+    const scaled = (x: Parameters<typeof live>[0]) => live(x.percent == null ? x : { ...x, percent: 0.15 + (0.8 * (i + x.percent)) / written.length })
+    sections += await extendTopic(t.id, u, fresh, { ...ctx, live: scaled }, instructions, stamp)
+  }
+  touchCourse(course.id)
+  const planned = updates.length - written.length
+  const summary =
+    r.data.summary.trim() ||
+    (sections || newTopics.length || planned
+      ? `Added ${[sections && `${sections} new section${sections === 1 ? '' : 's'}`, planned && `${planned} planned section${planned === 1 ? '' : 's'}`, newTopics.length && `${newTopics.length} new topic${newTopics.length === 1 ? '' : 's'}`].filter(Boolean).join(', ')}.`
+      : `${week.label} already covers everything in the new notes.`)
+  ctx.progress(summary)
+  return { sections, updated: updates.length, topics: newTopics.length, summary }
+}
+
+/** Write a written topic's new sections (at every level it's written at) and put them after its own. Returns how many were added to the level shown. */
+async function extendTopic(topicId: string, u: CourseUpdate['updates'][number], files: CourseFile[], ctx: JobContext, instructions: string, stamp: string): Promise<number> {
+  const t0 = getTopic(topicId)
+  const course = courseRow(t0.course_id)
+  const live = ctx.live ?? (() => {})
+  // The plan gets them too, so writing the topic again later includes them.
+  const plan = { ...t0.plan, sections: [...t0.plan.sections, ...u.sections], sources: [...t0.plan.sources, ...u.sources], stressed: [...t0.plan.stressed, ...u.stressed] }
+  setTopic(topicId, { plan: JSON.stringify(plan), status: 'writing', error: null })
+  const work = mkdtempSync(join(tmpdir(), 'studywise-topic-'))
+  try {
+    ctx.progress(`Adding to ${t0.content?.title ?? t0.plan.title}…`)
+    live({ stage: `Writing the new sections for ${t0.content?.title ?? t0.plan.title}…`, percent: 0.05 })
+    // Only the new material: the topic's own sources are already in its notes.
+    const src = await topicSources(files, { ...plan, sources: u.sources }, work)
+    const deckId = ensureWeekDeck(t0.week_id)
+    const shown = rowLevel(topicRow(topicId))
+    const levels = [shown, ...writtenLevels(topicRow(topicId)).filter((l) => l !== shown)]
+    let newCards: Card[] = []
+    let added = 0
+    for (const [i, level] of levels.entries()) {
+      const row = topicRow(topicId)
+      const versions = rowVersions(row)
+      const isShown = rowLevel(row) === level
+      const content = isShown ? json<TopicContent>(row.content, null as unknown as TopicContent) : versions[level]?.content
+      if (!content) continue
+      const existing = content.sections
+        .map((s, j) => `## ${j + 1}. ${s.heading}\n${s.notes}`)
+        .join('\n\n')
+        .slice(0, EXISTING_NOTES_CHARS)
+      const reuse = newCards.length
+        ? `The new material's recall cards are already made. For "cards", reuse exactly these, word for word (same front and back), each with the number of the new section that teaches it, and don't add others:\n${newCards.map((c) => `- front: ${JSON.stringify(c.front)} back: ${JSON.stringify(c.back)}`).join('\n')}`
+        : ''
+      live({ stage: levels.length > 1 ? `Writing the new sections (${NOTE_LEVEL_INFO[level].inline})…` : 'Writing the new sections…', percent: 0.1 + (0.8 * i) / levels.length })
+      const r = await runAI<CourseExtendOut>({
+        task: 'course_extend',
+        vars: {
+          module: course.module || course.name,
+          level: course.level,
+          topic_title: content.title,
+          existing,
+          new_sections: u.sections.map((h) => `- ${h}`).join('\n'),
+          source_text: src.text,
+          part_info: [src.notes.join('\n'), u.stressed.length ? `Stressed in the new material: ${u.stressed.join('; ')}` : ''].filter(Boolean).join('\n'),
+          instructions: [levelInstructions(level), reuse, priorityInstructions(instructions)].filter(Boolean).join('\n\n')
+        },
+        files: src.attach.length ? src.attach : undefined,
+        deckId,
+        signal: ctx.signal
+      })
+      const fresh: TopicSection[] = r.data.sections
+        .map((s, k) => ({ s, cards: sectionCards(r.data.cards, k + 1) }))
+        .filter(({ s }) => s.heading.trim() || s.notes.trim())
+        .map(({ s, cards }) => ({ heading: s.heading.trim(), notes: s.notes.trim(), figure: mapFigure(s.figure, src.attached), cards, questions: shuffleMcqs(sanitizeQuestions(s.questions)), added: stamp }))
+      if (!fresh.length) continue
+      // The first level makes the new recall cards; the others point at the same ones.
+      if (!newCards.length) {
+        newCards = repo.createCards(
+          r.data.cards
+            .filter((c) => c.front.trim() && c.back.trim())
+            .map((c) => ({ deck_id: deckId, format: 'question_answer' as const, front: withPointCount(c.front.trim(), c.back.trim()), back: c.back.trim(), tags: [content.title], source: { type: 'topic' as const, ref: topicId, section: content.title } }))
+        )
+      }
+      for (const s of fresh) for (const c of s.cards ?? []) c.id = newCards.find((x) => sameFront(x.front, c.front))?.id
+      const start = content.sections.length
+      const next: TopicContent = { ...content, sections: [...content.sections, ...fresh], check: [...content.check, ...shuffleMcqs(sanitizeQuestions(r.data.check))] }
+      // Finished it before: it opens again at the first new section, with your scores kept.
+      const reopen = (p: TopicProgress): TopicProgress => (p.done ? { ...p, done: false, section: start, step: null } : p)
+      if (isShown) {
+        const p = { ...emptyProgress(), ...json<Partial<TopicProgress>>(row.progress, {}) }
+        setTopic(topicId, { content: JSON.stringify(next), progress: JSON.stringify(reopen(p)) })
+        added = fresh.length
+      } else {
+        versions[level] = { content: next, progress: reopen({ ...emptyProgress(), ...versions[level]!.progress }) }
+        setTopic(topicId, { versions: JSON.stringify(versions) })
+      }
+    }
+    setTopic(topicId, { status: 'ready', error: null })
+    refreshDormancy(topicId)
+    const figs = (getTopic(topicId).content?.sections ?? []).filter((s) => s.added === stamp && s.figure).map((s) => s.figure!)
+    for (const f of figs) await figureUrl(f.fileId, f.page).catch(() => null)
+    await syncTopicNote(topicId).catch(() => null)
+    return added
+  } catch (e) {
+    // Its notes are still there: it stays usable, with the error shown.
+    setTopic(topicId, { status: 'ready', error: ctx.signal.aborted ? 'Cancelled' : `Adding the new notes didn’t finish: ${(e as Error).message}` })
+    throw e
+  } finally {
+    rmSync(work, { recursive: true, force: true })
+  }
 }
 
 // ---------------------------------------------------------------------------

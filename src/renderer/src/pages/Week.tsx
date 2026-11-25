@@ -31,9 +31,10 @@ import {
   Trash2,
   Upload,
   X,
-  Zap
+  Zap,
+  FilePlus2
 } from 'lucide-react'
-import { NOTE_LEVEL_INFO, NOTE_LEVELS, type CourseFile, type CourseFull, type NoteLevel, type Topic, type WeekFull } from '@shared/course'
+import { NOTE_LEVEL_INFO, NOTE_LEVELS, unreviewedSections, type CourseFile, type CourseFull, type NoteLevel, type Topic, type WeekFull } from '@shared/course'
 import { offerPlan, switchLevel, switchWeekLevel, writeQuickReview, writeTopics } from '../lib/courseFlows'
 import { planUsageText, type JobInfo } from '@shared/types'
 import { shareWeek } from '../lib/weekShare'
@@ -45,6 +46,7 @@ import { askText, confirmDialog } from '../lib/dialogs'
 import { Shell, PageTitle } from '../components/Shell'
 import { Button, Dots, Menu, MenuItem, Pill, ProgressBar, Segmented, cx } from '../components/ui'
 import { TrimCardsModal } from '../components/TrimCards'
+import { AddNotesModal } from '../components/AddNotes'
 import { JobLive } from '../components/JobLive'
 import { PrivatePill } from '../components/Visibility'
 import { IS_MOBILE } from '../lib/platform'
@@ -94,6 +96,12 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
   const jobs = useStore((s) => s.jobs)
   const planJob = runningJob(jobs, 'course_outline', 'weekId', w.id)
   const planning = w.status === 'planning' || !!planJob
+  // Adding new notes to the week (Claude works what's new into its topics).
+  const notesJob = runningJob(jobs, 'course_update', 'weekId', w.id)
+  const [addingNotes, setAddingNotes] = useState(false)
+  const canAddNotes = !IS_MOBILE && w.topics.length > 0 && !planning && !notesJob
+  // Sections added later that you haven't reviewed yet, across the week.
+  const newSections = w.topics.reduce((n, t) => n + unreviewedSections(t).length, 0)
   const unwritten = w.topics.filter((t) => t.status === 'planned' || t.status === 'error')
   const done = w.topics.filter((t) => t.progress.done).length
   const nextUp = w.topics.find((t) => t.status === 'ready' && !t.progress.done)
@@ -204,6 +212,11 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
                 <Sparkles className="size-4" /> Write {unwritten.length === w.topics.length ? `all ${unwritten.length}` : `${unwritten.length} more`}
               </Button>
             )}
+            {canAddNotes && (
+              <Button onClick={() => setAddingNotes(true)} title="Paste or add new material: anything new is added after what you’ve already reviewed">
+                <FilePlus2 className="size-4" /> Add new notes
+              </Button>
+            )}
             {!planning && noQuick.length > 0 && (
               <Button
                 onClick={() => quickReview(noQuick, noQuick.length === 1 ? (noQuick[0].content?.title ?? noQuick[0].plan.title) : `${noQuick.length} topics`)}
@@ -221,6 +234,11 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
             >
               {(close) => (
                 <>
+                  {canAddNotes && (
+                    <MenuItem desktopOnly icon={<FilePlus2 className="size-4" />} onClick={() => (close(), setAddingNotes(true))}>
+                      Add new notes…
+                    </MenuItem>
+                  )}
                   <MenuItem desktopOnly icon={<Upload className="size-4" />} onClick={() => (close(), void addFiles())}>
                     Add files
                   </MenuItem>
@@ -271,6 +289,13 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
           {w.topics.length ? `${w.topics.length} topic${w.topics.length === 1 ? '' : 's'} · about ${Math.round(minutes / 5) * 5 || minutes} minutes · ${done} done` : 'No topics yet'}
           {` · ${w.files.length} file${w.files.length === 1 ? '' : 's'} · ${w.card_count} flashcard${w.card_count === 1 ? '' : 's'}`}
         </span>
+        {newSections > 0 && (
+          <span className="ml-2 align-middle">
+            <NewPill title="Sections added since you studied these topics. Everything without this mark you’ve already reviewed.">
+              {newSections} new section{newSections === 1 ? '' : 's'} to review
+            </NewPill>
+          </span>
+        )}
         {w.recall_off && (
           <button onClick={() => void toggleRecall()} className="ml-2 align-middle" title="Its cards don’t come up in recall, course review or due counts. Click to turn recall back on.">
             <Pill>
@@ -301,6 +326,17 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
       <div className="flex flex-col gap-10">
         <section>
           <h2 className="mb-3 text-[1.1rem] font-semibold tracking-tight">Topics</h2>
+          {notesJob && (
+            <div className="mb-3 rounded-xl border border-accent/30 bg-accent-soft/40 p-5">
+              <div className="flex items-center gap-2 font-semibold">
+                <FilePlus2 className="size-4 text-accent" /> Adding your new notes to {w.label} <Dots />
+              </div>
+              <p className="mt-1 text-[0.9rem] text-muted">Claude is working out what’s new and where it goes. What you’ve already studied stays as it is. You can leave this page; it keeps going.</p>
+              <div className="mt-4">
+                <JobLive job={notesJob} />
+              </div>
+            </div>
+          )}
           {planning && (
             <div className="rounded-xl border border-line bg-surface p-5">
               <div className="flex items-center gap-2 font-semibold">
@@ -430,6 +466,7 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
           )}
         </nav>
       )}
+      <AddNotesModal open={addingNotes} onClose={() => setAddingNotes(false)} week={w} onStarted={reload} />
       {trim && (
         <TrimCardsModal
           weekId={w.id}
@@ -504,14 +541,18 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (to
   const p = t.progress
   const headings = ready ? t.content!.sections.map((s) => s.heading) : t.plan.sections
   const n = Number(t.key.match(/t(\d+)$/)?.[1] ?? t.position + 1)
+  // Added by "Add new notes": sections you haven't reviewed yet, or a whole new topic.
+  const fresh = new Set(unreviewedSections(t))
   return (
     <li className="rounded-xl border border-line bg-surface transition-[border-color,box-shadow] duration-300 ease-out-soft hover:border-[color-mix(in_oklab,var(--ink)_22%,transparent)]">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3.5 sm:gap-x-4 sm:px-5 sm:py-4">
         <div className={cx('grid size-8 shrink-0 place-items-center rounded-full text-[0.9rem] font-semibold transition-colors duration-500 sm:size-9', p.done ? 'bg-good text-white' : 'bg-surface-2')}>{p.done ? <CheckCircle2 className="size-5" /> : n}</div>
         <button className="min-w-[min(12rem,100%)] flex-1 text-left" onClick={() => headings.length && setOpen((v) => !v)} aria-expanded={open}>
-          <div className="flex items-center gap-1.5 font-semibold">
+          <div className="flex flex-wrap items-center gap-1.5 font-semibold">
             {t.content?.title ?? t.plan.title}
             {headings.length > 0 && <ChevronDown className={cx('size-4 shrink-0 text-muted transition-transform duration-200', open && 'rotate-180')} />}
+            {fresh.size > 0 && <NewPill title="Added since you studied this topic. Continue picks up at the first new section.">{fresh.size} new section{fresh.size === 1 ? '' : 's'}</NewPill>}
+            {!ready && t.plan.added && <NewPill title="A topic from notes you added later">New topic</NewPill>}
           </div>
           <div className="truncate text-[0.88rem] text-muted">{t.content?.goal ?? t.plan.goal}</div>
           {writing && !job && (
@@ -575,7 +616,7 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (to
                       icon={<RefreshCw className="size-4" />}
                       onClick={async () => {
                         close()
-                        const lvl = NOTE_LEVEL_INFO[t.level].label.toLowerCase()
+                        const lvl = NOTE_LEVEL_INFO[t.level].inline
                         const note = t.levels.length > 1 ? `Only the ${lvl} notes are replaced; your other levels and the recall cards stay.` : 'You get new notes and questions, and its recall cards are replaced (with their review history).'
                         if (await confirmDialog(`Write the ${lvl} notes again?`, note, { confirmText: 'Rewrite', danger: true })) {
                           try {
@@ -645,6 +686,7 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (to
                   >
                     {passed ? <CheckCircle2 className="size-4 shrink-0 text-good" /> : <span className="grid size-4 shrink-0 place-items-center text-[0.75rem] text-muted tabular">{i + 1}</span>}
                     <span className="min-w-0 flex-1 truncate">{h}</span>
+                    {fresh.has(i) && <NewPill title="Added since you studied this topic: not reviewed yet">New</NewPill>}
                     <ChevronRight className="size-3.5 shrink-0 text-muted" />
                   </button>
                 ) : (
@@ -659,5 +701,14 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (to
         </ol>
       )}
     </li>
+  )
+}
+
+/** Marks what was added by "Add new notes" and isn't reviewed yet. */
+function NewPill({ children, title }: { children: React.ReactNode; title?: string }) {
+  return (
+    <span title={title} className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent px-2 py-px text-[0.72rem] font-semibold text-accent-ink">
+      <Sparkles className="size-3" /> {children}
+    </span>
   )
 }

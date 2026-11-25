@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, extname, basename, dirname, normalize, sep } from 'node:path'
 import JSZip from 'jszip'
 import { exportObsidian, exportNotion } from '@shared/noteFormats'
@@ -421,9 +422,34 @@ export const handlers = {
       const w = c.weeks.find((x) => x.id === i.weekId)!
       return startJob('course_outline', `Plan: ${c.name} · ${w.label}`, (ctx) => course.planWeek(i.weekId, ctx, i.instructions))
     }),
+    /**
+     * Add new notes to a planned week: files, and/or text you paste (saved as a
+     * file in the week). Claude works what's new into the week's topics.
+     */
+    addNotes: h(z.object({ weekId: id, files: z.array(z.string()).max(200).default([]), text: z.string().max(500_000).default(''), instructions: z.string().max(4000).default('') }), async (i) => {
+      const cid = course.getCourseIdForWeek(i.weekId)
+      const c = course.getCourse(cid)
+      const w = c.weeks.find((x) => x.id === i.weekId)!
+      const paths = [...i.files]
+      if (i.text.trim()) {
+        const dir = mkdtempSync(join(tmpdir(), 'studywise-notes-'))
+        const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', '.')
+        const file = join(dir, `Notes added ${stamp}.md`)
+        writeFileSync(file, i.text)
+        paths.push(file)
+      }
+      if (!paths.length) throw new Error('Paste some notes or add a file first.')
+      const before = new Set(course.listFiles(cid).filter((f) => f.week_id === i.weekId).map((f) => f.id))
+      const fresh = (await course.addFiles(i.weekId, paths)).filter((f) => !before.has(f.id)).map((f) => f.id)
+      if (!fresh.length) throw new Error('None of those files can be added to a week.')
+      return startJob('course_update', `Add notes: ${c.name} · ${w.label}`, (ctx) =>
+        // Done or not, the week may be ready to publish again (Settings → Marketplace → automatically).
+        course.addNotesToWeek(i.weekId, fresh, ctx, i.instructions).finally(() => market.queueAutoPublish(i.weekId))
+      )
+    }),
     /** Write topics at one or more levels of detail (all levels are kept). No levels: write the level shown again. */
     /** keepShown: written topics keep showing their current notes; the new levels go alongside (a quick review, say). */
-    write: h(z.object({ topicIds: z.array(id).min(1).max(200), instructions: z.string().max(4000).default(''), levels: z.array(z.enum(NOTE_LEVELS)).max(3).default([]), keepShown: z.boolean().default(false) }), (i) => {
+    write: h(z.object({ topicIds: z.array(id).min(1).max(200), instructions: z.string().max(4000).default(''), levels: z.array(z.enum(NOTE_LEVELS)).max(NOTE_LEVELS.length).default([]), keepShown: z.boolean().default(false) }), (i) => {
       const topics = i.topicIds.map((tid) => course.getTopic(tid)).filter((t) => t.status !== 'writing')
       return topics.map((t) =>
         startJob('course_topic', `Topic: ${t.plan.title}`, (ctx) =>

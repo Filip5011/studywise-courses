@@ -48,7 +48,7 @@ export async function offerPlan(week: { id: string; label: string; topics?: { st
   }
 }
 
-const levelList = (levels: NoteLevel[]) => levels.map((l) => NOTE_LEVEL_INFO[l].label.toLowerCase()).join(' and ')
+const levelList = (levels: NoteLevel[]) => levels.map((l) => NOTE_LEVEL_INFO[l].inline).join(' and ')
 
 /**
  * Pick the level(s) of detail and write topics. For one written topic, the

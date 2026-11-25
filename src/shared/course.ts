@@ -19,7 +19,9 @@ export const OutlineTopic = z.object({
   sources: z.array(OutlineSource).default([]),
   needs: z.array(z.string()).default([]),
   stressed: z.array(z.string()).default([]),
-  minutes: z.number().default(15)
+  minutes: z.number().default(15),
+  /** When "Add new notes" added this topic to an already planned week. */
+  added: z.string().optional()
 })
 export type OutlineTopic = z.infer<typeof OutlineTopic>
 export const CourseOutline = z.object({ course: z.string().default(''), topics: z.array(OutlineTopic).min(1) })
@@ -70,6 +72,31 @@ export const AiTopic = z.object({
 })
 export type AiTopic = z.infer<typeof AiTopic>
 
+/** Adding new material to a planned week: what it adds to existing topics, and any new topics. */
+export const CourseUpdate = z.object({
+  summary: z.string().default(''),
+  updates: z
+    .array(
+      z.object({
+        topic: z.string(),
+        sections: z.array(z.string()).default([]),
+        sources: z.array(OutlineSource).default([]),
+        stressed: z.array(z.string()).default([])
+      })
+    )
+    .default([]),
+  topics: z.array(OutlineTopic).default([])
+})
+export type CourseUpdate = z.infer<typeof CourseUpdate>
+
+/** Just the new sections for a topic that's already written (plus a few test questions and recall cards for them). */
+export const CourseExtendOut = z.object({
+  sections: z.array(AiSection).min(1),
+  check: z.array(CourseQuestion).default([]),
+  cards: z.array(z.object({ front: z.string(), back: z.string(), section: z.number().int().nullable().default(null) })).default([])
+})
+export type CourseExtendOut = z.infer<typeof CourseExtendOut>
+
 export const CourseMarkOut = z.object({
   score: z.number().min(0).max(10),
   /** Marks awarded, one per key point (explainMarks). Older prompts don't return it. */
@@ -102,6 +129,8 @@ export interface TopicSection {
   /** Flashcards for what this section teaches, shown after its notes and before its questions. Missing on topics written before this. */
   cards?: { front: string; back: string; /** The deck card it was saved as, for rating it. */ id?: string }[]
   questions: CourseQuestion[]
+  /** When "Add new notes" added this section to a topic that was already written. */
+  added?: string
 }
 export interface TopicContent {
   title: string
@@ -129,6 +158,15 @@ export interface TopicPlace {
   /** Which question, for kind 'q'. */
   index?: number
 }
+/**
+ * Sections added by "Add new notes" that you haven't reviewed yet (by index).
+ * Everything before where you've got to, or in a finished topic, is reviewed.
+ */
+export function unreviewedSections(t: { content: TopicContent | null; progress: TopicProgress }): number[] {
+  if (!t.content || t.progress.done) return []
+  return t.content.sections.flatMap((s, i) => (s.added && i >= t.progress.section ? [i] : []))
+}
+
 export const emptyProgress = (): TopicProgress => ({ section: 0, done: false, answered: 0, correct: 0, checkScore: null, checkTotal: null, lastStudied: null })
 
 export type TopicStatus = 'planned' | 'writing' | 'ready' | 'error'
@@ -139,12 +177,14 @@ export type TopicStatus = 'planned' | 'writing' | 'ready' | 'error'
  * and goes slowly through everything, for topics you struggle with. A topic
  * can be written at several levels and keeps each one.
  */
-export const NOTE_LEVELS = ['standard', 'quick', 'deep'] as const
+export const NOTE_LEVELS = ['standard', 'quick', 'deep', 'simple'] as const
 export type NoteLevel = (typeof NOTE_LEVELS)[number]
-export const NOTE_LEVEL_INFO: Record<NoteLevel, { label: string; short: string; about: string }> = {
-  standard: { label: 'Standard', short: 'Standard', about: 'The usual notes: every examinable point, explained simply.' },
-  quick: { label: 'Quick revision', short: 'Quick', about: 'Shorter sections that take less time, still covering nearly everything.' },
-  deep: { label: 'In-depth', short: 'In-depth', about: 'A fuller write-up that goes slowly through everything. For topics you struggle with.' }
+/** label: on buttons and switches. inline: inside a sentence ("the quick revision notes"). */
+export const NOTE_LEVEL_INFO: Record<NoteLevel, { label: string; short: string; inline: string; about: string }> = {
+  standard: { label: 'Standard', short: 'Standard', inline: 'standard', about: 'The usual notes: every examinable point, explained simply.' },
+  quick: { label: 'Quick revision', short: 'Quick', inline: 'quick revision', about: 'Shorter sections that take less time, still covering nearly everything.' },
+  deep: { label: 'In-depth', short: 'In-depth', inline: 'in-depth', about: 'A fuller write-up that goes slowly through everything. For topics you struggle with.' },
+  simple: { label: 'Explain it like I’m 12', short: 'Like I’m 12', inline: '“explain it like I’m 12”', about: 'Everyday words and simple examples, one small step at a time, so it really clicks. Easy to review.' }
 }
 export const isNoteLevel = (v: unknown): v is NoteLevel => typeof v === 'string' && (NOTE_LEVELS as readonly string[]).includes(v)
 

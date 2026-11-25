@@ -268,6 +268,36 @@ export function mockResponse(task: TaskId, mode: string, vars: Record<string, un
       const out = { remove }
       return { text: JSON.stringify(out), structured: out }
     }
+    case 'course_update': {
+      const ids = [...v('topics').matchAll(/"id": "([^"]+)"/g)].map((m) => m[1])
+      const file = v('files').split(',')[0]?.replace(/\s*\(\d+ pages\)\s*$/, '').trim() || 'notes.txt'
+      const out = {
+        summary: 'Added a section on stopping voltage, and a new topic on photon momentum.',
+        updates: ids.length ? [{ topic: ids[0], sections: ['What is stopping voltage?'], sources: [{ file, where: '' }], stressed: ['Stopping voltage measures the fastest electrons'] }] : [],
+        topics: [{ id: 'n1', title: 'Photon momentum', goal: 'After this you can explain photon momentum.', sections: ['What is photon momentum?', 'Momentum vs energy:'], sources: [{ file, where: '' }], needs: ids.slice(0, 1), stressed: [], minutes: 8 }]
+      }
+      return { text: JSON.stringify(out), structured: out }
+    }
+    case 'course_extend': {
+      const h = (x: Record<string, unknown>) => ({ hint: 'Look back at the new notes.', why: 'Because that is what the new notes say.', ...x })
+      const heading = v('new_sections').split('\n')[0]?.replace(/^-\s*/, '').trim() || 'New section'
+      const out = {
+        sections: [
+          {
+            heading,
+            notes: 'Remember the work function from earlier? The **stopping voltage** is the voltage that just stops the fastest photoelectrons.\n\n- this tells you their maximum kinetic energy',
+            figure: null,
+            questions: [
+              h({ type: 'true_false', q: 'The stopping voltage stops the fastest photoelectrons.', answer: true }),
+              h({ type: 'mcq', q: 'What does the stopping voltage tell you?', options: ['Their maximum kinetic energy', 'The number of photons', 'The colour of the metal', 'The work function only'], answer: 0 })
+            ]
+          }
+        ],
+        check: [h({ type: 'explain', q: 'What does the stopping voltage measure?', model: 'The voltage that just stops the fastest photoelectrons, which gives their maximum kinetic energy.', points: ['stops the fastest photoelectrons', 'gives maximum kinetic energy'] })],
+        cards: [{ front: 'What is the stopping voltage?', back: 'The voltage that just stops the fastest photoelectrons.', section: 1 }]
+      }
+      return { text: JSON.stringify(out), structured: out }
+    }
     case 'course_mark': {
       const exp = new Set(words(v('model')))
       const got = new Set(words(v('answer')).filter((w) => exp.has(w)))

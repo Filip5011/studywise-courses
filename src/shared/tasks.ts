@@ -19,7 +19,9 @@ export const TASKS = [
   'course_outline',
   'course_topic',
   'course_mark',
-  'course_trim'
+  'course_trim',
+  'course_update',
+  'course_extend'
 ] as const
 export type TaskId = (typeof TASKS)[number]
 
@@ -225,6 +227,24 @@ export const TASK_INFO: Record<TaskId, TaskInfo> = {
     variables: ['module', 'level', 'cards'],
     streams: false,
     long: false
+  },
+  course_update: {
+    id: 'course_update',
+    label: 'Course: work new notes into a week',
+    defaultModel: 'sonnet',
+    modes: ['json'],
+    variables: ['module', 'level', 'week', 'topics', 'files', 'source_text', 'instructions'],
+    streams: false,
+    long: true
+  },
+  course_extend: {
+    id: 'course_extend',
+    label: 'Course: write new sections for a topic',
+    defaultModel: 'opus',
+    modes: ['json'],
+    variables: ['module', 'level', 'topic_title', 'existing', 'new_sections', 'source_text', 'part_info', 'instructions'],
+    streams: false,
+    long: true
   }
 }
 

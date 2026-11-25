@@ -146,6 +146,12 @@ export function App() {
             st.bump()
             toast(`${j.title.replace(/^Notes: /, '')}: notes ready`, 'good')
           }
+          if (j.kind === 'course_update') {
+            if (j.status !== 'done' || first) st.bump()
+            // The job's result says what was added (or that it was all covered already).
+            const summary = (j.result as { summary?: string } | null)?.summary
+            if (first) toast(`${j.title.replace(/^Add notes: /, '')}: ${summary || 'new notes added'}`, 'good')
+          }
           if (j.kind === 'course_outline' || j.kind === 'course_topic') {
             if (j.status !== 'done' || first) st.bump()
             if (first) toast(j.kind === 'course_outline' ? `${j.title.replace(/^Plan: /, '')}: topics planned` : `${j.title.replace(/^Topic: /, '')} is ready`, 'good')

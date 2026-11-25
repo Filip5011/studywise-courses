@@ -62,6 +62,7 @@ export const CHANNELS = [
   'courses.removeFile',
   'courses.openFile',
   'courses.plan',
+  'courses.addNotes',
   'courses.write',
   'courses.setLevel',
   'courses.setNote',

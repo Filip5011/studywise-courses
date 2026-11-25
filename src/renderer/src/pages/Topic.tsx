@@ -609,13 +609,13 @@ function RewriteDialog({ level, levels, section, onClose, onRewrite }: { level: 
             Cancel
           </Button>
           <Button variant={replaces ? 'danger' : 'primary'} loading={busy} onClick={go}>
-            {replaces ? 'Rewrite' : `Write ${NOTE_LEVEL_INFO[pick].label.toLowerCase()}`}
+            {replaces ? 'Rewrite' : `Write ${NOTE_LEVEL_INFO[pick].inline}`}
           </Button>
         </>
       }
     >
       <div className="mb-3 text-[0.84rem] font-medium text-ink/80">Level of detail</div>
-      <div className="mb-3 grid gap-2 sm:grid-cols-3">
+      <div className="mb-3 grid gap-2 sm:grid-cols-2">
         {NOTE_LEVELS.map((l) => (
           <button
             key={l}
@@ -632,8 +632,8 @@ function RewriteDialog({ level, levels, section, onClose, onRewrite }: { level: 
       <p className="mb-3 text-[0.92rem] text-muted">{NOTE_LEVEL_INFO[pick].about}</p>
       <p className="mb-3 text-muted">
         {replaces
-          ? `You get new ${NOTE_LEVEL_INFO[pick].label.toLowerCase()} notes and questions, and your progress on them starts again. ${keepsCards ? 'Your other levels and the recall cards stay.' : 'Its recall cards are replaced.'}`
-          : `This is added alongside the ${levels.map((l) => NOTE_LEVEL_INFO[l].label.toLowerCase()).join(' and ')} notes, which stay. Switch between them on the week page.`}{' '}
+          ? `You get new ${NOTE_LEVEL_INFO[pick].inline} notes and questions, and your progress on them starts again. ${keepsCards ? 'Your other levels and the recall cards stay.' : 'Its recall cards are replaced.'}`
+          : `This is added alongside the ${levels.map((l) => NOTE_LEVEL_INFO[l].inline).join(' and ')} notes, which stay. Switch between them on the week page.`}{' '}
         It costs about the same as writing the topic the first time.
       </p>
       <Textarea
@@ -663,6 +663,11 @@ function NotesStep({ section, first, goal, onNext, onAsk }: { section: TopicSect
     <div className="pop-in flex flex-col gap-5">
       <div className="rounded-xl border border-line bg-surface p-[clamp(18px,3.4vw,36px)]">
         {first && goal && <div className="mb-2 text-[0.85rem] font-semibold text-accent">{goal}</div>}
+        {section.added && (
+          <div className="mb-2 inline-flex items-center gap-1 rounded-full bg-accent px-2.5 py-0.5 text-[0.75rem] font-semibold text-accent-ink" title="Added from notes you added later">
+            New · added {new Date(section.added).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+          </div>
+        )}
         <h2 className="mb-4 text-[clamp(1.35rem,2.6vw,1.85rem)] leading-tight font-semibold tracking-tight">{section.heading}</h2>
         <Markdown className="text-[1.05rem] leading-relaxed">{section.notes}</Markdown>
         {section.figure && !imgErr && (
