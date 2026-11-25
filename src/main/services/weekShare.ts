@@ -74,17 +74,23 @@ export async function exportWeek(weekId: string, file: string): Promise<WeekPrev
 }
 
 /** The .studyweek file's bytes (and what's in it). */
-export async function weekZip(weekId: string): Promise<{ bytes: Buffer; json: WeekJson }> {
+/** What goes in a shared or published week: its rows without your progress, and where its files are. */
+function weekRows(weekId: string) {
   const d = getDb()
   const week = d.prepare('SELECT * FROM weeks WHERE id = ?').get(weekId) as Row | undefined
   if (!week) throw new Error('Week not found')
   const course = d.prepare('SELECT * FROM courses WHERE id = ?').get(week.course_id) as Row
   const courseDir = join(paths.courses, String(course.id))
-  const files = (d.prepare('SELECT * FROM course_files WHERE week_id = ? ORDER BY position').all(weekId) as Row[]).map((f) => ({ ...f, path: zipPath(relative(courseDir, String(f.path))) }))
+  const files = (d.prepare('SELECT * FROM course_files WHERE week_id = ? ORDER BY position').all(weekId) as Row[]).map((f): Row & { path: string } => ({ ...f, path: zipPath(relative(courseDir, String(f.path))) }))
   // Your progress and the link to your own copy of the notes stay with you.
   // Every level of detail a topic is written at goes, without your progress on it.
   const topics = (d.prepare('SELECT * FROM topics WHERE week_id = ? ORDER BY position').all(weekId) as Row[]).map((t) => ({ ...t, progress: '{}', note_id: null, versions: noProgress(t.versions) }))
-  const cards = week.deck_id ? (d.prepare('SELECT * FROM cards WHERE deck_id = ?').all(week.deck_id) as Row[]) : []
+  const cards = week.deck_id ? (d.prepare('SELECT * FROM cards WHERE deck_id = ? ORDER BY id').all(week.deck_id) as Row[]) : []
+  return { week, course, courseDir, files, topics, cards }
+}
+
+export async function weekZip(weekId: string): Promise<{ bytes: Buffer; json: WeekJson }> {
+  const { week, course, courseDir, files, topics, cards } = weekRows(weekId)
   const json: WeekJson = {
     app: 'studywise-courses',
     kind: 'week',
@@ -105,6 +111,28 @@ export async function weekZip(weekId: string): Promise<{ bytes: Buffer; json: We
     if (existsSync(full)) zip.file(`files/${f.path}`, readFileSync(full))
   }
   return { bytes: await zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' }), json }
+}
+
+/**
+ * A hash of what publishing the week would send: same hash, nothing new to
+ * upload. Leaves out what changes just by studying or by settings that aren't
+ * shared (which cards are still waiting, timestamps, recall on or off,
+ * private), and hashes each file's bytes.
+ */
+export function weekContentHash(weekId: string): string {
+  const { week, course, courseDir, files, topics, cards } = weekRows(weekId)
+  const drop = (r: Row, keys: string[]) => Object.fromEntries(Object.entries(r).filter(([k]) => !keys.includes(k)))
+  const content = {
+    course: { name: String(course.name), module: String(course.module ?? ''), level: String(course.level ?? '') },
+    week: drop(week, ['id', 'course_id', 'deck_id', 'private', 'recall_off', 'created_at']),
+    topics: topics.map((t) => drop(t, ['course_id', 'week_id', 'updated_at'])),
+    cards: cards.map((c) => drop(c, ['deck_id', 'dormant', 'created_at', 'updated_at'])),
+    files: files.map((f) => {
+      const full = join(courseDir, String(f.path))
+      return { name: f.name, path: f.path, pages: f.pages, position: f.position, sha256: existsSync(full) ? createHash('sha256').update(readFileSync(full)).digest('hex') : null }
+    })
+  }
+  return createHash('sha256').update(JSON.stringify(content)).digest('hex')
 }
 
 function previewOf(j: WeekJson): WeekPreview {

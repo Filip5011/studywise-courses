@@ -8,7 +8,8 @@ export const MultipleChoiceQ = z.object({
   options: z.array(z.string().min(1)).length(4),
   correct_index: z.number().int().min(0).max(3)
 })
-export const FreeAnswerQ = z.object({ question: z.string().min(1), expected_answer: z.string().min(1) })
+/** marks: what it's out of, shown with the question (course essay questions); otherwise marked out of 10. */
+export const FreeAnswerQ = z.object({ question: z.string().min(1), expected_answer: z.string().min(1), marks: z.number().int().positive().optional() })
 export const TrueFalseQ = z.object({ statement: z.string().min(1), is_true: z.boolean(), correction: z.string().default('') })
 export const MatchPairsQ = z.object({
   pairs: z.array(z.object({ left: z.string(), right: z.string(), card_id: z.string() })).min(2)
@@ -128,6 +129,8 @@ export interface Mark {
     short_feedback?: string
     blanks?: boolean[]
     wrongItems?: number[]
+    /** Essay questions: marks got out of the marks it's worth. */
+    marks?: { got: number; total: number }
   }
   by: 'code' | 'ai'
 }

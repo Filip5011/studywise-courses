@@ -106,6 +106,47 @@ describe('levels of detail, course notes, priority instructions (mock AI)', () =
     }
   }, 60_000)
 
+  it('a quick review goes alongside the notes, which stay shown, and both are in the shared week', async () => {
+    const share = await import('../../src/main/services/weekShare')
+    const course = svc.createCourse({ name: 'Optics quick', level: 'first-year' })
+    const w = svc.addWeek(course.id)
+    await svc.addFiles(w.id, [resolve('tests/fixtures/photoelectric-lecture.pdf')])
+    await svc.planWeek(w.id, ctx())
+    const [t] = svc.listTopics(course.id)
+    await svc.writeTopic(t.id, ctx())
+    const before = svc.getTopic(t.id)
+    svc.saveProgress(t.id, { ...before.progress, section: 1, answered: 2, correct: 2 })
+
+    await svc.writeTopic(t.id, ctx(), '', ['quick'], true)
+    const after = svc.getTopic(t.id)
+    // Still showing the standard notes, with their progress; the quick review is kept next to them.
+    expect(after).toMatchObject({ level: 'standard', levels: ['standard', 'quick'], card_count: before.card_count })
+    expect(after.progress).toMatchObject({ section: 1, answered: 2 })
+    expect(after.content).toEqual(before.content)
+
+    // Sharing or publishing the week carries both.
+    const { json } = await share.weekZip(w.id)
+    const row = json.topics.find((x) => x.id === t.id)!
+    expect(row.level).toBe('standard')
+    expect(Object.keys(JSON.parse(String(row.versions)))).toContain('quick')
+  }, 60_000)
+
+  it('says what an essay question is out of, marks it in marks, and gives hints one at a time', async () => {
+    const { explainMarks, questionHints } = await import('@shared/course')
+    const q = { type: 'explain' as const, q: 'Explain the photoelectric effect.', model: 'Light comes in photons; each photon frees one electron if its energy is above the work function.', points: ['light comes in photons', 'one photon frees one electron', 'energy above the work function'], hint: 'Think about what light is made of.', why: '' }
+    expect(explainMarks(q)).toBe(3)
+    expect(explainMarks({ ...q, points: [] })).toBe(1)
+    expect(questionHints(q)).toEqual(['Think about what light is made of.', 'A mark for: light comes in photons', 'A mark for: one photon frees one electron', 'A mark for: energy above the work function'])
+    expect(questionHints({ type: 'true_false', q: 'x', answer: true, hint: '', why: '' })).toEqual([])
+
+    const course = svc.createCourse({ name: 'Marks 101', level: '' })
+    const r = await svc.markExplain(course.id, q, 'Light is made of photons, and one photon frees one electron.')
+    expect(r.mark.detail?.marks?.total).toBe(3)
+    expect(r.mark.detail?.marks?.got).toBeGreaterThan(0)
+    expect(r.mark.score).toBeCloseTo((r.mark.detail!.marks!.got / 3) * 10, 0)
+    expect((await svc.markExplain(course.id, q, '  ')).mark.detail?.marks).toEqual({ got: 0, total: 3 })
+  })
+
   it('asks for the level of detail, and puts typed instructions first', () => {
     expect(svc.levelInstructions('standard')).toBe('')
     expect(svc.levelInstructions('quick')).toMatch(/QUICK REVISION/)

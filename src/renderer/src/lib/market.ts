@@ -137,7 +137,8 @@ export async function setWeekVisibility(week: { id: string; label: string }, isP
 
 /**
  * Publish every week you've written something in (or one course's), as a job.
- * Weeks already on the marketplace are replaced with what you have now.
+ * Weeks already on the marketplace are only uploaded again if they've changed
+ * since; the rest are skipped.
  */
 export async function publishAllToMarket(courseId?: string): Promise<boolean> {
   try {
@@ -147,15 +148,24 @@ export async function publishAllToMarket(courseId?: string): Promise<boolean> {
       useStore.getState().go({ name: 'settings', tab: 'market' })
       return false
     }
-    const weeks = await api.market.publishable(courseId ? { courseId } : undefined)
-    if (!weeks.length) {
+    const all = await api.market.publishable(courseId ? { courseId } : undefined)
+    if (!all.length) {
       toast('There’s nothing to publish: write some topics first, and only public courses and weeks are published.', 'info')
       return false
     }
+    const weeks = all.filter((w) => w.state !== 'same')
+    const same = all.length - weeks.length
+    if (!weeks.length) {
+      toast(`${courseId ? `${all[0].course} is` : 'Everything is'} already on the marketplace and up to date (${plural(all.length, 'week')}).`, 'good')
+      return false
+    }
+    const fresh = weeks.filter((w) => w.state === 'new').length
+    const changed = weeks.length - fresh
     const courses = [...new Set(weeks.map((w) => w.course))]
+    const what = [fresh && `${plural(fresh, 'new week')}`, changed && `${plural(changed, 'week')} you’ve changed since publishing`].filter(Boolean).join(' and ')
     const ok = await confirmDialog(
       courseId ? `Publish ${courses[0]} to the marketplace?` : `Publish all your courses to the marketplace?`,
-      `${plural(weeks.length, 'week')}${courseId ? '' : ` from ${plural(courses.length, 'course')} (${courses.join(', ')})`}, with their topics, questions, flashcards, slides and transcripts. Everyone on ${new URL(status.url).host} can see and add them. Weeks you published before are replaced with what you have now. Only weeks with a written topic are included, and your progress isn’t. Only publish material you’re allowed to share.`,
+      `${what}${courseId ? '' : ` from ${plural(courses.length, 'course')} (${courses.join(', ')})`}, with their topics, questions, flashcards, slides and transcripts.${same ? ` ${plural(same, 'week')} already up to date ${same === 1 ? 'is' : 'are'} skipped.` : ''} Everyone on ${new URL(status.url).host} can see and add them. Only weeks with a written topic are included, and your progress isn’t. Only publish material you’re allowed to share.`,
       { confirmText: `Publish ${plural(weeks.length, 'week')}` }
     )
     if (!ok) return false

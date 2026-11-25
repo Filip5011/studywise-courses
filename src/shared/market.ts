@@ -103,6 +103,15 @@ export const IMPORTED_WEEKS_SETTING = 'market.importedWeeks'
 
 export type MarketSort = 'recent' | 'popular'
 
+/** One of your weeks that can be published, and whether it needs uploading. */
+export interface PublishableWeek {
+  weekId: string
+  course: string
+  label: string
+  /** new: not on the marketplace (or taken down there). changed: edited since you published it. same: up to date, so it's skipped. */
+  state: 'new' | 'changed' | 'same'
+}
+
 /** "alex", "alex and sam", "alex, sam and 3 others". */
 export function authorsText(shown: string[]): string {
   if (shown.length <= 2) return shown.join(' and ')

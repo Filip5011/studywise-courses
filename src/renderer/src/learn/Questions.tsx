@@ -156,7 +156,14 @@ export function FreeAnswer({ q, mark, answer, onAnswer, disabled }: QProps<'free
   }, [q.id, disabled])
   return (
     <div className="flex flex-col gap-4">
-      <Markdown className="text-[clamp(1.2rem,2.4vw,1.6rem)] leading-snug font-semibold">{q.payload.question}</Markdown>
+      <div className="flex items-start gap-3">
+        <Markdown className="min-w-0 flex-1 text-[clamp(1.2rem,2.4vw,1.6rem)] leading-snug font-semibold">{q.payload.question}</Markdown>
+        {q.payload.marks && (
+          <span className="mt-1 shrink-0 rounded-md bg-surface-2 px-2 py-0.5 text-[0.85rem] font-semibold text-muted tabular" title="One mark for each key point">
+            {q.payload.marks} mark{q.payload.marks === 1 ? '' : 's'}
+          </span>
+        )}
+      </div>
       <Textarea
         ref={ref}
         rows={4}
@@ -181,8 +188,8 @@ export function FreeAnswer({ q, mark, answer, onAnswer, disabled }: QProps<'free
         <div className="pop-in grid gap-3 sm:grid-cols-[auto_1fr]">
           <div className={cx('grid size-20 place-items-center rounded-xl text-center', mark.verdict === 'correct' ? 'bg-good-soft text-good' : mark.verdict === 'partial' ? 'bg-warn-soft text-warn' : 'bg-bad-soft text-bad')}>
             <div>
-              <div className="text-3xl leading-none font-semibold">{Math.round(mark.score)}</div>
-              <div className="text-[0.75rem] font-semibold">/ 10</div>
+              <div className="text-3xl leading-none font-semibold">{mark.detail?.marks ? mark.detail.marks.got : Math.round(mark.score)}</div>
+              <div className="text-[0.75rem] font-semibold">{mark.detail?.marks ? `/ ${mark.detail.marks.total} mark${mark.detail.marks.total === 1 ? '' : 's'}` : '/ 10'}</div>
             </div>
           </div>
           <div className="flex flex-col gap-2">

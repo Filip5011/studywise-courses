@@ -428,12 +428,13 @@ export const handlers = {
       return startJob('course_outline', `Plan: ${c.name} · ${w.label}`, (ctx) => course.planWeek(i.weekId, ctx, i.instructions))
     }),
     /** Write topics at one or more levels of detail (all levels are kept). No levels: write the level shown again. */
-    write: h(z.object({ topicIds: z.array(id).min(1).max(200), instructions: z.string().max(4000).default(''), levels: z.array(z.enum(NOTE_LEVELS)).max(3).default([]) }), (i) => {
+    /** keepShown: written topics keep showing their current notes; the new levels go alongside (a quick review, say). */
+    write: h(z.object({ topicIds: z.array(id).min(1).max(200), instructions: z.string().max(4000).default(''), levels: z.array(z.enum(NOTE_LEVELS)).max(3).default([]), keepShown: z.boolean().default(false) }), (i) => {
       const topics = i.topicIds.map((tid) => course.getTopic(tid)).filter((t) => t.status !== 'writing')
       return topics.map((t) =>
         startJob('course_topic', `Topic: ${t.plan.title}`, (ctx) =>
           // Done or not, the week may be ready to publish (Settings → Marketplace → automatically).
-          course.writeTopic(t.id, ctx, i.instructions, i.levels).finally(() => market.queueAutoPublish(t.week_id))
+          course.writeTopic(t.id, ctx, i.instructions, i.levels, i.keepShown).finally(() => market.queueAutoPublish(t.week_id))
         )
       )
     }),
@@ -529,12 +530,12 @@ export const handlers = {
     /** Which of your courses each marketplace course's weeks go into (remembered), by marketplace course id. */
     linkedCourses: h(z.object({ ids: z.array(id).max(500) }), (i) => market.linkedCourses(i.ids)),
     publish: h(z.object({ weekId: id }), (i) => market.publish(i.weekId)),
-    /** Weeks that can be published: every course's, or one course's. */
-    publishable: h(z.object({ courseId: z.string().optional() }).optional(), (i) => market.publishableWeeks(i?.courseId)),
-    /** Publish all of them as a job (it can take a while with slides to upload). */
-    publishAll: h(z.object({ courseId: z.string().optional() }).optional(), (i) => {
-      const weeks = market.publishableWeeks(i?.courseId)
-      if (!weeks.length) throw new Error('There’s nothing to publish yet: write some topics first.')
+    /** Weeks that can be published (every course's, or one course's), and which are new, changed or already up to date. */
+    publishable: h(z.object({ courseId: z.string().optional() }).optional(), (i) => market.publishPlan(i?.courseId)),
+    /** Publish the new and changed ones as a job (it can take a while with slides to upload). Up-to-date weeks aren't uploaded again. */
+    publishAll: h(z.object({ courseId: z.string().optional() }).optional(), async (i) => {
+      const weeks = (await market.publishPlan(i?.courseId)).filter((w) => w.state !== 'same')
+      if (!weeks.length) throw new Error('Everything is already on the marketplace and up to date.')
       const title = i?.courseId ? `Publish ${weeks[0].course}` : `Publish ${weeks.length} week${weeks.length === 1 ? '' : 's'}`
       return startJob('other', title, (ctx) => market.publishMany(weeks, ctx))
     }),
