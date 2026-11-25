@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowLeft, ChevronDown, ChevronRight, Download, FileText, Search, Store, Trash2, Upload, Users } from 'lucide-react'
-import { authorsText, modelLabel, weeksByNumber, type MarketCourse, type MarketCourseFull, type MarketSort, type MarketWeek } from '@shared/market'
+import { authorsText, modelLabel, weeksByWeek, type MarketCourse, type MarketCourseFull, type MarketSort, type MarketWeek, type WeekGroup } from '@shared/market'
 import { NOTE_LEVEL_INFO, isNoteLevel } from '@shared/course'
 import { api, errorText } from '../lib/api'
 import { addMarketWeek, modelsText, publishAllToMarket, weekSummary } from '../lib/market'
@@ -8,7 +8,7 @@ import { confirmDialog } from '../lib/dialogs'
 import { toast, useStore } from '../lib/store'
 import { Shell, PageTitle } from '../components/Shell'
 import { MarketSetup } from '../components/MarketSetup'
-import { Button, Card, Empty, Input, Pill, Segmented, Select, Spinner, cx } from '../components/ui'
+import { Button, Card, Empty, Input, Pill, Segmented, Spinner, cx } from '../components/ui'
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
 const mb = (bytes: number) => `${(bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0)} MB`
@@ -183,38 +183,45 @@ function MarketCoursePage({ id }: { id: string }) {
         <div className="mt-1.5 text-[0.88rem]">Written with {modelsText(c.models)}</div>
       </PageTitle>
       <div className="flex flex-col gap-3">
-        {weeksByNumber(c.weeks).map((g) =>
-          g.versions.length === 1 ? <WeekRow key={g.versions[0].id} w={g.versions[0]} onRemoved={load} /> : <WeekVersions key={g.number} number={g.number} versions={g.versions} onRemoved={load} />
-        )}
+        {weeksByWeek(c.weeks).map((g) => (g.versions.length === 1 ? <WeekRow key={g.versions[0].id} w={g.versions[0]} onRemoved={load} /> : <WeekGroupRow key={g.key} g={g} onRemoved={load} />))}
       </div>
     </Shell>
   )
 }
 
-/** "by alex (you) · opus · high · 12 downloads": tells versions of the same week apart. */
-const versionText = (w: MarketWeek) => [`by ${w.author}${w.mine ? ' (you)' : ''}`, w.writtenWith[0] && modelLabel(w.writtenWith[0]), plural(w.downloads, 'download')].filter(Boolean).join(' · ')
-
-/** Several people have published the same week: show one at a time, and pick which from a dropdown. */
-function WeekVersions({ number, versions, onRemoved }: { number: number; versions: MarketWeek[]; onRemoved: () => void }) {
-  const [id, setId] = useState(versions[0].id)
-  // The one you picked may have just been taken down.
-  const w = versions.find((v) => v.id === id) ?? versions[0]
+/**
+ * Several people have generated the same week: one row for the week, with how
+ * many people made it. Open it to see every version, each with its own Add.
+ */
+function WeekGroupRow({ g, onRemoved }: { g: WeekGroup<MarketWeek>; onRemoved: () => void }) {
+  const [open, setOpen] = useState(false)
+  const downloads = g.versions.reduce((n, v) => n + v.downloads, 0)
+  const mine = g.versions.some((v) => v.mine)
+  const models = [...new Set(g.versions.map((v) => v.writtenWith[0] && modelLabel(v.writtenWith[0])).filter(Boolean))]
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-line p-2">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-2 pt-1">
-        <div className="font-semibold">
-          Week {number}
-          <span className="ml-2 text-[0.86rem] font-normal text-muted">{plural(versions.length, 'version')}</span>
+    <div className="rounded-xl border border-line bg-surface">
+      <button className="flex w-full flex-wrap items-center gap-3 p-4 text-left" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? <ChevronDown className="size-4 shrink-0 text-muted" /> : <ChevronRight className="size-4 shrink-0 text-muted" />}
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold">{g.title}</div>
+          <div className="text-[0.86rem] text-muted">
+            {plural(g.versions.length, 'version')} · {plural(downloads, 'download')}
+            {models.length > 0 && ` · ${models.slice(0, 3).join(', ')}${models.length > 3 ? ` and ${models.length - 3} more` : ''}`}
+          </div>
         </div>
-        <Select className="ml-auto w-auto max-w-full" value={w.id} onChange={(e) => setId(e.target.value)} aria-label={`Which version of week ${number}`}>
-          {versions.map((v) => (
-            <option key={v.id} value={v.id}>
-              {v.label} · {versionText(v)}
-            </option>
+        {mine && <Pill tone="accent">Includes yours</Pill>}
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-accent-soft px-2.5 py-1 text-[0.82rem] font-medium text-accent">
+          <Users className="size-3.5" />
+          {g.people} {g.people === 1 ? 'person' : 'people'} generated
+        </span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-2 border-t border-line p-3">
+          {g.versions.map((v) => (
+            <WeekRow key={v.id} w={v} onRemoved={onRemoved} />
           ))}
-        </Select>
-      </div>
-      <WeekRow key={w.id} w={w} onRemoved={onRemoved} />
+        </div>
+      )}
     </div>
   )
 }

@@ -98,20 +98,48 @@ export function authorsText(shown: string[]): string {
   return `${shown[0]}, ${shown[1]} and ${shown.length - 2} others`
 }
 
+/** 9 from "Week 9", "W9", "Week 9: Testing"; null when there's no number. Same rule as the server's "same week" check. */
+export function weekNumber(label: string): number | null {
+  const m = String(label ?? '').match(/\d+/)
+  return m ? Number(m[0]) : null
+}
+
+export interface WeekGroup<W> {
+  /** "w9" for everyone's Week 9; the label itself for a week with no number in it. */
+  key: string
+  /** "Week 9", or the label when it has no number. */
+  title: string
+  /** The number from the label, or null. */
+  number: number | null
+  /** Most downloaded first, then the most recently updated. */
+  versions: W[]
+  /** How many different people published a version of it. */
+  people: number
+}
+
 /**
- * A course's weeks grouped by week number, in order, so everyone's version of
- * week 3 sits together. In each group the most downloaded version comes
- * first, then the most recently updated.
+ * A course's weeks grouped so everyone's version of the same week sits
+ * together. Weeks are the same when their labels have the same number ("Week 3",
+ * "W3: Testing"), whatever position they have in their author's own course;
+ * a label without a number only groups with the same label. Groups come in week
+ * order.
  */
-export function weeksByNumber<W extends Pick<MarketWeek, 'number' | 'downloads' | 'updatedAt'>>(weeks: W[]): { number: number; versions: W[] }[] {
-  const groups = new Map<number, W[]>()
-  for (const w of weeks) groups.set(w.number, [...(groups.get(w.number) ?? []), w])
+export function weeksByWeek<W extends Pick<MarketWeek, 'label' | 'number' | 'author' | 'downloads' | 'updatedAt'>>(weeks: W[]): WeekGroup<W>[] {
+  const groups = new Map<string, { number: number | null; order: number; versions: W[] }>()
+  for (const w of weeks) {
+    const n = weekNumber(w.label)
+    const key = n !== null ? `w${n}` : `l:${w.label.replace(/\s+/g, ' ').trim().toLowerCase()}`
+    const g = groups.get(key) ?? { number: n, order: n ?? (Number.isFinite(w.number) ? w.number : Infinity), versions: [] }
+    if (n === null && Number.isFinite(w.number)) g.order = Math.min(g.order, w.number)
+    g.versions.push(w)
+    groups.set(key, g)
+  }
   return [...groups.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([number, versions]) => ({
-      number,
-      versions: versions.sort((a, b) => b.downloads - a.downloads || b.updatedAt.localeCompare(a.updatedAt))
-    }))
+    .sort(([ka, a], [kb, b]) => a.order - b.order || (a.number === null ? 1 : 0) - (b.number === null ? 1 : 0) || ka.localeCompare(kb))
+    .map(([key, g]) => {
+      const versions = [...g.versions].sort((a, b) => b.downloads - a.downloads || b.updatedAt.localeCompare(a.updatedAt))
+      return { key, number: g.number, title: g.number !== null ? `Week ${g.number}` : versions[0].label, versions, people: new Set(versions.map((v) => v.author)).size }
+    })
 }
 
 /** "opus · high", "sonnet", "gpt-oss:120b (Ollama) · high". */

@@ -508,12 +508,17 @@ function UpdateBanner() {
   const [status, setStatus] = useState<UpdateStatus | null>(null)
   // "Later" hides the banner until more changes arrive.
   const [dismissedAt, setDismissedAt] = useState(0)
+  // Installed builds: "Later" hides this version until it's ready (or a newer one comes out).
+  const [dismissedRelease, setDismissedRelease] = useState<string | null>(null)
   useEffect(() => {
     void api.updates.status().then(setStatus)
     return onEvent((ev) => ev.type === 'update' && setStatus(ev.status))
   }, [])
   if (!status?.supported) return null
-  if (status.kind === 'release') return dismissedAt ? null : <ReleaseBanner status={status} onLater={() => setDismissedAt(1)} />
+  if (status.kind === 'release') {
+    const key = `${status.version}:${status.ready}:${status.state === 'error'}`
+    return dismissedRelease === key ? null : <ReleaseBanner status={status} onLater={() => setDismissedRelease(key)} />
+  }
   const busy = status.state === 'updating' || status.state === 'restarting'
   if (!busy && ((status.behind === 0 && status.state !== 'error') || (dismissedAt > 0 && status.behind <= dismissedAt))) return null
   const n = status.behind
@@ -558,11 +563,14 @@ function UpdateBanner() {
   )
 }
 
-/** An installed build: a new release is downloading, ready to install (Windows), or out to download (Mac). */
+/** An installed build: a new release is downloading, ready to install, or failed to download (Windows), or out to download (Mac). */
 function ReleaseBanner({ status, onLater }: { status: UpdateStatus; onLater: () => void }) {
   if (!status.version) return null
   const downloading = status.state === 'updating'
   const restarting = status.state === 'restarting'
+  const failed = status.state === 'error'
+  // Only a Mac build has a page to download from; Windows installs it itself.
+  const manual = !!status.downloadUrl
   const install = async () => {
     try {
       await api.updates.apply()
@@ -574,26 +582,32 @@ function ReleaseBanner({ status, onLater }: { status: UpdateStatus; onLater: () 
     ? 'Installing the update…'
     : downloading
       ? (status.stage ?? `Downloading version ${status.version}…`)
-      : status.ready
-        ? `Version ${status.version} is ready`
-        : `Version ${status.version} is out`
+      : failed
+        ? `Version ${status.version} didn’t download`
+        : status.ready
+          ? `Version ${status.version} is ready`
+          : `Version ${status.version} is out`
   const detail = restarting
     ? 'Studywise will close and open again.'
     : downloading
       ? 'Keep working. It installs when you restart Studywise.'
-      : status.ready
-        ? 'Restart to update now, or it installs next time you quit. Your courses, decks and notes stay.'
-        : 'Download it and drag it to Applications to replace this one. Your courses, decks and notes stay.'
+      : failed
+        ? (status.error ?? 'Check your connection and try again.')
+        : status.ready
+          ? 'Restart to update now, or it installs next time you quit. Your courses, decks and notes stay.'
+          : manual
+            ? 'Download it and drag it to Applications to replace this one. Your courses, decks and notes stay.'
+            : 'It downloads in the background, then installs when you restart.'
   return (
     <div className="pop-in mx-3 mt-2.5 flex flex-wrap items-center gap-3 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 sm:mx-4">
-      {downloading || restarting ? <Spinner className="size-5 shrink-0 text-accent" /> : <Download className="size-5 shrink-0 text-accent" />}
+      {downloading || restarting ? <Spinner className="size-5 shrink-0 text-accent" /> : failed ? <AlertTriangle className="size-5 shrink-0 text-warn" /> : <Download className="size-5 shrink-0 text-accent" />}
       <div className="min-w-0 flex-1 text-[0.92rem]">
         <div className="font-semibold">{title}</div>
         <div className="text-muted">{detail}</div>
       </div>
-      {!downloading && !restarting && (
+      {!downloading && !restarting && (failed || status.ready || manual) && (
         <Button size="sm" variant="ink" onClick={install}>
-          {status.ready ? 'Restart to update' : 'Download'}
+          {failed ? 'Try again' : status.ready ? 'Restart to update' : 'Download'}
         </Button>
       )}
       {!restarting && (

@@ -13,11 +13,26 @@ REPO="SnakeLuck360GT/studywise-courses"
 VERSION="v$(node -p "require('./package.json').version")"
 NOTES="docs/release-notes-${VERSION}.md"
 # latest*.yml and the blockmaps are what installed copies read to update themselves.
-ASSETS=(release/Studywise-Courses.dmg release/Studywise-Courses-mac.zip release/Studywise-Courses-Setup.exe release/Studywise-Courses-win-x64.zip
-  release/latest.yml release/latest-mac.yml release/Studywise-Courses-Setup.exe.blockmap release/Studywise-Courses-mac.zip.blockmap)
+# latest*.yml go last: they point at the installers, so those must be up first.
+# A platform that wasn't built this time is left out (a Windows-only release
+# is fine), but each platform that was built needs all of its files.
+MAC=(release/Studywise-Courses.dmg release/Studywise-Courses-mac.zip release/Studywise-Courses-mac.zip.blockmap release/latest-mac.yml)
+WIN=(release/Studywise-Courses-Setup.exe release/Studywise-Courses-win-x64.zip release/Studywise-Courses-Setup.exe.blockmap release/latest.yml)
 
 : "${GITHUB_TOKEN:?Set GITHUB_TOKEN first}"
-for f in "${ASSETS[@]}"; do [ -f "$f" ] || { echo "Missing $f. Run npm run dist and npm run dist:win."; exit 1; }; done
+version_ok() { grep -q "^version: ${VERSION#v}$" "$1" 2>/dev/null; }
+INSTALLERS=() FEEDS=()
+add_platform() { # name, then its files: three installers/blockmaps and its latest*.yml last
+  local name=$1; shift
+  local feed=${*: -1}
+  if ! version_ok "$feed"; then echo "No ${VERSION#v} build for $name ($feed missing or another version), leaving it out."; return; fi
+  for f in "$@"; do [ -f "$f" ] || { echo "Missing $f. Build it again (npm run dist / npm run dist:win)."; exit 1; }; done
+  INSTALLERS+=("$1" "$2" "$3") FEEDS+=("$feed")
+}
+add_platform Mac "${MAC[@]}"
+add_platform Windows "${WIN[@]}"
+[ ${#FEEDS[@]} -gt 0 ] || { echo "Nothing built for ${VERSION#v}. Run npm run dist and/or npm run dist:win."; exit 1; }
+ASSETS=("${INSTALLERS[@]}" "${FEEDS[@]}")
 
 api() { curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
 
@@ -25,10 +40,13 @@ api() { curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: applicat
 git rev-parse "$VERSION" >/dev/null 2>&1 || git tag -a "$VERSION" -m "$VERSION"
 git push -q origin "$VERSION" 2>/dev/null || true
 
-# Reuse the release if it already exists, otherwise create it.
-id=$(api "https://api.github.com/repos/$REPO/releases/tags/$VERSION" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).id||"")}catch{console.log("")}})')
+# Reuse the release if it already exists (a draft from a run that stopped
+# halfway too), otherwise create it as a draft. Installed copies only see it
+# once it's published at the end, with every file in place: a release that's
+# out before its latest.yml makes their update check fail.
+id=$(api "https://api.github.com/repos/$REPO/releases?per_page=50" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const r=JSON.parse(s).find(x=>x.tag_name===process.argv[1]);console.log(r?r.id:"")}catch{console.log("")}})' "$VERSION")
 if [ -z "$id" ]; then
-  body=$(node -e 'const fs=require("fs");console.log(JSON.stringify({tag_name:process.argv[1],name:"Studywise Courses "+process.argv[1].slice(1),body:fs.existsSync(process.argv[2])?fs.readFileSync(process.argv[2],"utf8"):""}))' "$VERSION" "$NOTES")
+  body=$(node -e 'const fs=require("fs");console.log(JSON.stringify({tag_name:process.argv[1],name:"Studywise Courses "+process.argv[1].slice(1),draft:true,body:fs.existsSync(process.argv[2])?fs.readFileSync(process.argv[2],"utf8"):""}))' "$VERSION" "$NOTES")
   id=$(api -X POST "https://api.github.com/repos/$REPO/releases" -d "$body" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).id))')
   echo "Created release $VERSION ($id)"
 else
@@ -44,5 +62,8 @@ for f in "${ASSETS[@]}"; do
   api -X POST -H "Content-Type: application/octet-stream" --data-binary @"$f" \
     "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=$name" >/dev/null
 done
+
+# Publish it (and make it the latest release): installed copies pick it up from here.
+api -X PATCH "https://api.github.com/repos/$REPO/releases/$id" -d '{"draft":false,"make_latest":"true"}' >/dev/null
 
 echo "Done: https://github.com/$REPO/releases/tag/$VERSION"

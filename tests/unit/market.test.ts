@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import JSZip from 'jszip'
 import { signature, similarity, words, SIGNATURE_SIZE } from '@shared/fingerprint'
-import { authorsText, modelLabel, weeksByNumber } from '@shared/market'
+import { authorsText, modelLabel, weekNumber, weeksByWeek } from '@shared/market'
 
 const lecture = (topic: string, n: number) =>
   Array.from({ length: n }, (_, i) => `In ${topic} the ${i}th idea builds on the one before it, and the lecture works an example through step by step.`).join(' ')
@@ -39,12 +39,33 @@ describe('week fingerprints', () => {
     expect(authorsText(['alex', 'sam', 'kim', 'lee', 'pat'])).toBe('alex, sam and 3 others')
   })
 
-  it('groups versions of the same week, most downloaded then newest first', () => {
-    const w = (id: string, number: number, downloads: number, updatedAt: string) => ({ id, number, downloads, updatedAt })
-    const groups = weeksByNumber([w('a', 3, 1, '2026-01-01'), w('b', 1, 0, '2026-01-01'), w('c', 3, 5, '2026-01-01'), w('d', 3, 1, '2026-02-01'), w('e', 2, 0, '2026-01-01')])
-    expect(groups.map((g) => g.number)).toEqual([1, 2, 3])
-    expect(groups.map((g) => g.versions.map((v) => v.id))).toEqual([['b'], ['e'], ['c', 'd', 'a']])
-    expect(weeksByNumber([])).toEqual([])
+  it('groups everyone’s version of the same week by the number in its label', () => {
+    const w = (id: string, label: string, number: number, author: string, downloads = 0, updatedAt = '2026-01-01') => ({ id, label, number, author, downloads, updatedAt })
+    const groups = weeksByWeek([
+      w('a', 'Week 3', 3, 'alex', 1),
+      w('b', 'Week 1', 1, 'alex'),
+      // Sam skipped week 2, so their Week 3 is second in their course: still week 3.
+      w('c', 'Week 3: Testing', 2, 'sam', 5),
+      w('d', 'W3', 7, 'kim', 1, '2026-02-01'),
+      w('e', 'Week 2', 2, 'kim'),
+      w('f', 'Revision', 9, 'alex'),
+      w('g', 'revision ', 4, 'sam')
+    ])
+    expect(groups.map((g) => g.title)).toEqual(['Week 1', 'Week 2', 'Week 3', 'Revision'])
+    expect(groups.map((g) => g.versions.map((v) => v.id))).toEqual([['b'], ['e'], ['c', 'd', 'a'], ['f', 'g']])
+    expect(groups.map((g) => g.people)).toEqual([1, 1, 3, 2])
+    expect(weeksByWeek([])).toEqual([])
+  })
+
+  it('counts people, not versions', () => {
+    const w = (id: string, author: string) => ({ id, label: 'Week 1', number: 1, author, downloads: 0, updatedAt: '2026-01-01' })
+    expect(weeksByWeek([w('a', 'alex'), w('b', 'alex'), w('c', 'sam')])[0].people).toBe(2)
+  })
+
+  it('reads week numbers from labels', () => {
+    expect(weekNumber('Week 9: Testing')).toBe(9)
+    expect(weekNumber('W12')).toBe(12)
+    expect(weekNumber('Intro')).toBeNull()
   })
 
   it('labels models', () => {
