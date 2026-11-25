@@ -22,8 +22,15 @@ import { paths } from './paths'
 
 const IS_WIN = process.platform === 'win32'
 const CHECK_EVERY_MS = 30 * 60_000
-/** Releases come out far less often than commits. */
-const RELEASE_CHECK_EVERY_MS = 2 * 60 * 60_000
+/**
+ * Installed builds check this often too. The check reads
+ * github.com/…/releases/latest and latest.yml, not the rate-limited API, so
+ * it's cheap; checking every two hours meant a new release could sit unseen
+ * for most of a study session.
+ */
+const RELEASE_CHECK_EVERY_MS = 30 * 60_000
+/** Coming back to the window checks again, if the last check was at least this long ago. */
+const FOCUS_CHECK_AFTER_MS = 10 * 60_000
 const FIRST_CHECK_MS = 15_000
 const RELEASES_URL = 'https://github.com/SnakeLuck360GT/studywise-courses/releases'
 
@@ -105,12 +112,19 @@ function releaseUpdater(): AutoUpdater {
   u.autoDownload = CAN_INSTALL
   u.autoInstallOnAppQuit = CAN_INSTALL
   u.allowPrerelease = false
-  u.logger = null
+  // Into main.log, so a failed update leaves a trace.
+  u.logger = {
+    info: (m?: unknown) => console.log('[update]', String(m)),
+    warn: (m?: unknown) => console.warn('[update]', String(m)),
+    error: (m?: unknown) => console.error('[update]', String(m)),
+    debug: () => {}
+  }
   u.on('update-available', (info) =>
     set({
       behind: 1,
       version: info.version,
       downloadUrl: CAN_INSTALL ? null : `${RELEASES_URL}/tag/v${info.version}`,
+      ready: false,
       state: CAN_INSTALL ? 'updating' : 'idle',
       stage: CAN_INSTALL ? `Downloading version ${info.version}…` : null,
       error: null
@@ -119,24 +133,26 @@ function releaseUpdater(): AutoUpdater {
   u.on('download-progress', (p) => set({ stage: `Downloading version ${status.version}… ${Math.round(p.percent)}%` }))
   u.on('update-downloaded', (info) => set({ state: 'idle', stage: null, ready: true, version: info.version }))
   u.on('error', (e) => {
-    // Offline, or GitHub having a moment: try again at the next check.
     console.warn('[update] release check failed:', e?.message)
-    if (status.state === 'updating' || status.state === 'checking') set({ state: 'idle', stage: null })
+    // A download that failed: say so (Try again downloads it again). A failed
+    // check (offline, or GitHub having a moment) just tries again later.
+    if (status.state === 'updating') set({ state: 'error', stage: null, error: `Version ${status.version} didn’t download. Check your connection and try again.` })
+    else if (status.state === 'checking') set({ state: 'idle', stage: null })
   })
   updater = u
   return u
 }
 
 async function checkRelease(): Promise<UpdateStatus> {
-  if (status.ready || status.state === 'updating' || status.state === 'restarting') return status
-  set({ state: 'checking' })
+  if (status.ready || status.state === 'updating' || status.state === 'restarting' || status.state === 'checking') return status
+  set({ state: 'checking', error: null })
   try {
     await releaseUpdater().checkForUpdates()
   } catch (e) {
     console.warn('[update] release check failed:', (e as Error).message)
   }
   // An update found is already downloading ('updating'); otherwise there's nothing new.
-  return status.state === 'checking' ? set({ state: 'idle', checkedAt: new Date().toISOString() }) : set({ checkedAt: new Date().toISOString() })
+  return updateStatus().state === 'checking' ? set({ state: 'idle', checkedAt: new Date().toISOString() }) : set({ checkedAt: new Date().toISOString() })
 }
 
 async function applyRelease(): Promise<UpdateStatus> {
@@ -145,6 +161,8 @@ async function applyRelease(): Promise<UpdateStatus> {
     await shell.openExternal(status.downloadUrl ?? `${RELEASES_URL}/latest`)
     return status
   }
+  // The download failed: try it again.
+  if (status.state === 'error') return checkRelease()
   if (!status.ready) throw new Error('The update is still downloading.')
   if (runningJobCount() > 0) throw new Error('Wait for the running jobs to finish first (see the Jobs page), then update.')
   set({ state: 'restarting', stage: 'Installing the update…' })
@@ -256,10 +274,17 @@ function restart(): void {
   setTimeout(() => app.quit(), 400)
 }
 
-/** Check soon after launch, then every half hour (installed builds: every two hours). Status changes go to `onChange`. */
+/**
+ * Check soon after launch, then every half hour, and when you come back to the
+ * window after a while. Status changes go to `onChange`.
+ */
 export function startUpdateChecks(onChange: (s: UpdateStatus) => void): void {
   notify = onChange
   if (!supported) return
   setTimeout(() => void checkForUpdate(), FIRST_CHECK_MS)
   setInterval(() => void checkForUpdate(), kind === 'release' ? RELEASE_CHECK_EVERY_MS : CHECK_EVERY_MS)
+  app.on('browser-window-focus', () => {
+    const last = status.checkedAt ? Date.parse(status.checkedAt) : 0
+    if (Date.now() - last >= FOCUS_CHECK_AFTER_MS) void checkForUpdate()
+  })
 }

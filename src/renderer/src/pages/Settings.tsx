@@ -31,12 +31,13 @@ import {
   Laptop,
   Store
 } from 'lucide-react'
+import type { UpdateStatus } from '@shared/update'
 import type { Preset, PresetVersion, CustomAction, ModelChoice, AiCall, Thresholds, AiProvider, OllamaModel } from '@shared/types'
 import { ACTION_PLACEMENTS, DEFAULT_THRESHOLDS } from '@shared/types'
 import { TASK_INFO, TASKS, MODEL_ALIASES, EFFORT_LEVELS, OLLAMA_EFFORT_LEVELS, type TaskId } from '@shared/tasks'
 import { useStore, toast } from '../lib/store'
 import { Jobs } from './Jobs'
-import { api, streamCall, errorText } from '../lib/api'
+import { api, onEvent, streamCall, errorText } from '../lib/api'
 import { useCommands } from '../lib/commands'
 import { confirmDialog, askText } from '../lib/dialogs'
 import { Shell, PageTitle } from '../components/Shell'
@@ -225,10 +226,55 @@ function General() {
         <p className="text-[0.92rem] text-muted">
           Studywise {info?.version} {IS_MOBILE ? (mobile().platform === 'ios' ? '· iPhone' : mobile().platform === 'android' ? '· Android' : '· Web') : `· Electron ${info?.electron}`} {info?.mock && <Pill tone="warn">AI_MOCK on</Pill>}
         </p>
+        {!IS_MOBILE && <UpdateCheck />}
         <p className="text-[0.92rem] text-muted">
           {IS_MOBILE && 'On the phone, AI features run on your paired computer. '}AI features run through the Claude Code CLI on this computer with your own Claude subscription, or through Ollama if you switch to it under AI provider. Studywise never sees your Claude login. Use is subject to each provider’s terms.
         </p>
       </Card>
+    </div>
+  )
+}
+
+/** Settings → About: whether this copy is up to date, and a button to check now. */
+function UpdateCheck() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null)
+  useEffect(() => {
+    void api.updates.status().then(setStatus)
+    return onEvent((ev) => ev.type === 'update' && setStatus(ev.status))
+  }, [])
+  if (!status?.supported) return null
+  const check = async () => {
+    try {
+      const s = await api.updates.check()
+      setStatus(s)
+      if (s.state === 'idle' && !s.version && !s.behind) toast('You’re on the latest version', 'good')
+    } catch (e) {
+      toast(errorText(e), 'bad')
+    }
+  }
+  const ago = status.checkedAt ? new Date(status.checkedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : null
+  const text =
+    status.state === 'checking'
+      ? 'Checking for updates…'
+      : status.state === 'updating' || status.state === 'restarting'
+        ? (status.stage ?? 'Updating…')
+        : status.state === 'error'
+          ? (status.error ?? 'The update didn’t finish.')
+          : status.ready
+            ? `Version ${status.version} is ready: restart to update.`
+            : status.version || status.behind
+              ? status.kind === 'release'
+                ? `Version ${status.version} is out.`
+                : `${status.behind} new change${status.behind === 1 ? '' : 's'} on GitHub.`
+              : ago
+                ? `Up to date (checked at ${ago}).`
+                : 'Checks for updates automatically.'
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-[0.92rem]">
+      <span className="text-muted">{text}</span>
+      <Button size="sm" onClick={check} loading={status.state === 'checking'} disabled={status.state === 'updating' || status.state === 'restarting'}>
+        Check for updates
+      </Button>
     </div>
   )
 }
