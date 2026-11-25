@@ -274,6 +274,10 @@ export const MIGRATIONS: string[] = [
   /* 11: a change is always logged as later than the version it replaced (a phone a little behind the computer's clock lost edits) */ `
   ${SYNC_TABLES.flatMap((t) => ['ins', 'upd', 'del'].map((k) => `DROP TRIGGER IF EXISTS sync_${t.name}_${k};`)).join('\n  ')}
   ${syncTriggersSql(SYNC_TABLES)}
+  `,
+  /* 12: courses and weeks can be private: never published to the marketplace (a week is private if it or its course is) */ `
+  ALTER TABLE courses ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE weeks ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
   `
 ]
 

@@ -91,7 +91,8 @@ export async function weekZip(weekId: string): Promise<{ bytes: Buffer; json: We
     format: FORMAT,
     exportedAt: new Date().toISOString(),
     course: { name: String(course.name), module: String(course.module ?? ''), level: String(course.level ?? '') },
-    week: { ...week, deck_id: null },
+    // Whether it's private on your computer is yours, like the deck it's in.
+    week: { ...week, deck_id: null, private: undefined },
     files,
     topics,
     cards,

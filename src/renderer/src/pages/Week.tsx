@@ -24,6 +24,8 @@ import {
   RotateCcw,
   Share2,
   Store,
+  Globe,
+  Lock,
   Search,
   Sparkles,
   Trash2,
@@ -34,7 +36,7 @@ import { NOTE_LEVEL_INFO, type CourseFile, type CourseFull, type Topic, type Wee
 import { offerPlan, switchLevel, writeTopics } from '../lib/courseFlows'
 import { planUsageText, type JobInfo } from '@shared/types'
 import { shareWeek } from '../lib/weekShare'
-import { chooseMarketWeek, declinedMarketWeek, findMarketWeek, marketMatches, modelsText, publishToMarket } from '../lib/market'
+import { chooseMarketWeek, declinedMarketWeek, findMarketWeek, marketMatches, modelsText, publishToMarket, setWeekVisibility } from '../lib/market'
 import type { MarketMatch } from '@shared/market'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
@@ -43,6 +45,7 @@ import { Shell, PageTitle } from '../components/Shell'
 import { Button, Dots, Menu, MenuItem, Pill, ProgressBar, Segmented, cx } from '../components/ui'
 import { TrimCardsModal } from '../components/TrimCards'
 import { JobLive } from '../components/JobLive'
+import { PrivatePill } from '../components/Visibility'
 import { IS_MOBILE } from '../lib/platform'
 
 export const runningJob = (jobs: JobInfo[], kind: JobInfo['kind'], key: string, value: string) => jobs.find((j) => j.kind === kind && j.status === 'running' && j.meta?.[key] === value)
@@ -221,9 +224,14 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
                       Find on marketplace…
                     </MenuItem>
                   )}
-                  {w.topics.some((t) => t.status === 'ready') && (
+                  {w.topics.some((t) => t.status === 'ready') && !w.private && !c.private && (
                     <MenuItem desktopOnly icon={<Store className="size-4" />} onClick={() => (close(), void publishToMarket(w))}>
                       Publish to marketplace…
+                    </MenuItem>
+                  )}
+                  {!c.private && (
+                    <MenuItem desktopOnly icon={w.private ? <Globe className="size-4" /> : <Lock className="size-4" />} onClick={() => (close(), void setWeekVisibility(w, !w.private).then((ok) => ok && reload()))}>
+                      {w.private ? 'Make week public' : 'Make week private…'}
                     </MenuItem>
                   )}
                   <MenuItem icon={<Pencil className="size-4" />} onClick={() => (close(), void rename())}>
@@ -248,6 +256,11 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
               <BellOff className="size-3" /> Recall off · turn on
             </Pill>
           </button>
+        )}
+        {(w.private || c.private) && !IS_MOBILE && (
+          <span className="ml-2 align-middle">
+            <PrivatePill title={c.private ? `Private: ${c.name} is private, so this week never goes on the marketplace. Make the course public from its ⋯ menu.` : 'Private: this week never goes on the marketplace. Make it public from the ⋯ menu.'} />
+          </span>
         )}
       </PageTitle>
 

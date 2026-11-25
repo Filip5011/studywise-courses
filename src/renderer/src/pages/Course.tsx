@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff, CalendarDays, Scissors, StickyNote, Store } from 'lucide-react'
+import { SlidersHorizontal, Sparkles, Play, Layers, MoreHorizontal, Pencil, Trash2, Plus, ChevronRight, Download, BellOff, CalendarDays, Scissors, StickyNote, Store, Globe, Lock } from 'lucide-react'
 import { offerPlan, writeTopics } from '../lib/courseFlows'
 import { importSharedWeek } from '../lib/weekShare'
-import { declinedMarketWeek, marketMatches, offerMarketWeek, publishAllToMarket } from '../lib/market'
+import { declinedMarketWeek, marketMatches, offerMarketWeek, publishAllToMarket, setCourseVisibility } from '../lib/market'
 import { TrimCardsModal } from '../components/TrimCards'
-import { examPhase, revisionMaxGapDays, type CourseFull, type WeekFull } from '@shared/course'
+import { examPhase, revisionMaxGapDays, sortWeeks, type CourseFull, type WeekFull, type WeekOrder } from '@shared/course'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
 import { askText, confirmDialog } from '../lib/dialogs'
 import { Shell, PageTitle } from '../components/Shell'
-import { Button, Field, Input, Menu, MenuItem, Modal, Pill, ProgressBar, Textarea } from '../components/ui'
+import { PrivatePill, VisibilityField, type Visibility } from '../components/Visibility'
+import { IS_MOBILE } from '../lib/platform'
+import { Button, Field, Input, Menu, MenuItem, Modal, Pill, ProgressBar, Segmented, Textarea } from '../components/ui'
 import { FileDrop } from './Courses'
 import { runningJob } from './Week'
 import { DeckSettings } from './Deck'
@@ -32,6 +34,7 @@ export function CoursePage({ id }: { id: string }) {
       .catch((e) => setError(errorText(e)))
   useEffect(() => void load(), [id, version])
   const made = useMadeWeeks(c)
+  const [order, setOrder] = useWeekOrder()
 
   if (error)
     return (
@@ -109,11 +112,14 @@ export function CoursePage({ id }: { id: string }) {
                   <MenuItem desktopOnly icon={<Download className="size-4" />} onClick={() => (close(), void importSharedWeek({ courseId: id }))}>
                     Add a shared week…
                   </MenuItem>
-                  {topics.some((t) => t.status === 'ready') && (
+                  {topics.some((t) => t.status === 'ready') && !c.private && (
                     <MenuItem desktopOnly icon={<Store className="size-4" />} onClick={() => (close(), void publishAllToMarket(id))}>
                       Publish course to marketplace…
                     </MenuItem>
                   )}
+                  <MenuItem desktopOnly icon={c.private ? <Globe className="size-4" /> : <Lock className="size-4" />} onClick={() => (close(), void setCourseVisibility(c, !c.private).then((ok) => void (ok && load())))}>
+                    {c.private ? 'Make course public' : 'Make course private…'}
+                  </MenuItem>
                   <MenuItem icon={<CalendarDays className="size-4" />} onClick={() => (close(), setExamOpen(true))}>
                     {c.exam_date ? 'Change exam date…' : 'Set exam date…'}
                   </MenuItem>
@@ -150,15 +156,32 @@ export function CoursePage({ id }: { id: string }) {
           {topics.length > 0 && ` · ${topics.length} topics · about ${Math.round(minutes / 5) * 5 || minutes} minutes · ${done} done`}
         </span>
         <ExamBadge date={c.exam_date} onClick={() => setExamOpen(true)} />
+        {c.private && !IS_MOBILE && (
+          <span className="ml-2 align-middle">
+            <PrivatePill title="Private: none of this course’s weeks go on the marketplace. Make it public from the ⋯ menu." />
+          </span>
+        )}
       </PageTitle>
 
       {topics.length > 0 && <ProgressBar value={done / topics.length} className="mb-8" />}
 
       <CourseNote note={c.note} onEdit={() => setNoteOpen(true)} />
 
+      {c.weeks.length > 1 && (
+        <div className="mb-2 flex justify-end">
+          <Segmented
+            value={order}
+            onChange={setOrder}
+            options={[
+              { value: 'asc', label: 'Week 1 first' },
+              { value: 'desc', label: 'Latest week first' }
+            ]}
+          />
+        </div>
+      )}
       {c.weeks.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
-          {c.weeks.map((w) => (
+          {sortWeeks(c.weeks, order).map((w) => (
             <WeekRow key={w.id} c={c} w={w} made={made.has(w.id)} />
           ))}
         </ul>
@@ -209,7 +232,7 @@ export function CoursePage({ id }: { id: string }) {
 
       {adding && (
         <AddWeekModal
-          courseId={c.id}
+          course={c}
           defaultLabel={`Week ${c.weeks.length + 1}`}
           onClose={() => setAdding(false)}
           onDone={() => {
@@ -370,6 +393,26 @@ function ExamDateModal({ courseId, date, onClose }: { courseId: string; date: st
   )
 }
 
+const ORDER_KEY = 'sw.weekOrder'
+
+/**
+ * Which way every course lists its weeks, by week number (so a week added
+ * later, like one from the marketplace, sits in its place). Remembered on
+ * this device.
+ */
+function useWeekOrder(): [WeekOrder, (o: WeekOrder) => void] {
+  const [order, setOrder] = useState<WeekOrder>(() => (localStorage.getItem(ORDER_KEY) === 'desc' ? 'desc' : 'asc'))
+  const set = (o: WeekOrder) => {
+    setOrder(o)
+    try {
+      localStorage.setItem(ORDER_KEY, o)
+    } catch {
+      /* storage unavailable: still works until you leave the page */
+    }
+  }
+  return [order, set]
+}
+
 /** Blank weeks (no topics) that someone has already published on the marketplace. */
 function useMadeWeeks(c: CourseFull | null): Set<string> {
   const [made, setMade] = useState<Set<string>>(new Set())
@@ -427,6 +470,7 @@ function WeekRow({ c, w, made }: { c: CourseFull; w: WeekFull; made: boolean }) 
                 </Pill>
               </span>
             )}
+            {w.private && !c.private && !IS_MOBILE && <PrivatePill title="Private: this week never goes on the marketplace. Make it public from the week’s ⋯ menu." />}
             {status && (
               <Pill tone={status.tone === 'muted' ? 'neutral' : status.tone}>{status.text}</Pill>
             )}
@@ -447,14 +491,16 @@ function WeekRow({ c, w, made }: { c: CourseFull; w: WeekFull; made: boolean }) 
   )
 }
 
-function AddWeekModal({ courseId, defaultLabel, onClose, onDone }: { courseId: string; defaultLabel: string; onClose: () => void; onDone: () => void }) {
+function AddWeekModal({ course, defaultLabel, onClose, onDone }: { course: CourseFull; defaultLabel: string; onClose: () => void; onDone: () => void }) {
+  const courseId = course.id
   const [label, setLabel] = useState(defaultLabel)
+  const [visibility, setVisibility] = useState<Visibility>(course.private ? 'private' : 'public')
   const [files, setFiles] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const create = async () => {
     setBusy(true)
     try {
-      const w = await api.courses.addWeek({ courseId, label: label.trim(), files })
+      const w = await api.courses.addWeek({ courseId, label: label.trim(), files, private: visibility === 'private' })
       onDone()
       // Files are added, not planned: ask first (that checks the marketplace too).
       if (files.length) await offerPlan(w, { added: files.length })
@@ -489,6 +535,7 @@ function AddWeekModal({ courseId, defaultLabel, onClose, onDone }: { courseId: s
         <Field label="Files" hint="This week’s slides, lecture transcripts and readings. Once they’re added you’re asked whether to plan the week’s topics now.">
           <FileDrop list={files} setList={setFiles} />
         </Field>
+        {!IS_MOBILE && <VisibilityField what="week" value={visibility} onChange={setVisibility} lockedBy={course.private ? course.name : undefined} />}
       </div>
     </Modal>
   )
