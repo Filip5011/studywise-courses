@@ -3,21 +3,23 @@
 // their own tokens. You give the app the site's address and an API key made
 // on the site's account page; the key is kept encrypted, like the Ollama key.
 
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getSetting, setSetting } from '../db/repo'
 import { getSecret, setSecret } from '../secrets'
 import { getDb } from '../db'
 import { setCoursePrivate, setWeekPrivate, weekFingerprint } from './course'
-import { weekZip } from './weekShare'
+import { weekContentHash, weekZip } from './weekShare'
 import { startJob, type JobContext } from '../jobs'
-import { AUTO_PUBLISH_SETTING, IMPORTED_WEEKS_SETTING, type MarketCourse, type MarketCourseFull, type MarketMatch, type MarketSort, type MarketStatus, type MarketWeek } from '@shared/market'
+import { AUTO_PUBLISH_SETTING, IMPORTED_WEEKS_SETTING, type MarketCourse, type MarketCourseFull, type MarketMatch, type MarketSort, type MarketStatus, type MarketWeek, type PublishableWeek } from '@shared/market'
 
 const URL_SETTING = 'market.url'
 const KEY_SETTING = 'secret.marketKey' as const
 /** Which marketplace week each of your weeks was published as: {localWeekId: remoteWeekId}. */
 const PUBLISHED_SETTING = 'market.published'
+/** What each of your weeks had in it when it was last published (weekContentHash): {localWeekId: hash}. */
+const PUBLISHED_HASH_SETTING = 'market.publishedHash'
 const TIMEOUT_MS = 30_000
 /** The "already made" check runs before planning, so it mustn't hold planning up for long. */
 const SIMILAR_TIMEOUT_MS = 8_000
@@ -117,6 +119,17 @@ export async function mine(): Promise<(MarketWeek & { courseName: string })[]> {
 }
 
 const published = () => getSetting<Record<string, string>>(PUBLISHED_SETTING, {})
+const publishedHashes = () => getSetting<Record<string, string>>(PUBLISHED_HASH_SETTING, {})
+function setPublishedHash(weekId: string, hash: string | null): void {
+  const rest = Object.fromEntries(Object.entries(publishedHashes()).filter(([k]) => k !== weekId))
+  setSetting(PUBLISHED_HASH_SETTING, hash ? { ...rest, [weekId]: hash } : rest)
+}
+/** Forget a remote week (taken down, or gone from the site): the local week isn't published any more. */
+function forgetRemote(remoteWeekId: string): void {
+  const on = published()
+  setSetting(PUBLISHED_SETTING, Object.fromEntries(Object.entries(on).filter(([, v]) => v !== remoteWeekId)))
+  for (const [local, remote] of Object.entries(on)) if (remote === remoteWeekId) setPublishedHash(local, null)
+}
 
 /** A week stays off the marketplace when it, or its course, is private. */
 export function isWeekPrivate(weekId: string): boolean {
@@ -143,6 +156,7 @@ export async function publish(weekId: string): Promise<{ week: MarketWeek; repla
   const written = getDb().prepare("SELECT COUNT(*) n FROM topics WHERE week_id = ? AND status = 'ready'").get(weekId) as { n: number }
   if (!written.n) throw new Error('Write at least one of this week’s topics before publishing it.')
   if (isWeekPrivate(weekId)) throw new Error(privateWhy(weekId))
+  const hash = weekContentHash(weekId)
   const { bytes } = await weekZip(weekId)
   const before = published()[weekId]
   const post = (replace?: string) =>
@@ -163,6 +177,7 @@ export async function publish(weekId: string): Promise<{ week: MarketWeek; repla
     replaced = false
   }
   setSetting(PUBLISHED_SETTING, { ...published(), [weekId]: r.week.id })
+  setPublishedHash(weekId, hash)
   return { week: r.week, replaced }
 }
 
@@ -176,6 +191,57 @@ export function publishableWeeks(courseId?: string): { weekId: string; course: s
        ORDER BY c.name COLLATE NOCASE, w.position`
     )
     .all(...(courseId ? [courseId] : [])) as { weekId: string; course: string; label: string }[]
+}
+
+/**
+ * The server's summary of a week (what /api/mine shows), worked out from your
+ * copy and compared: for weeks published before their content hash was kept.
+ */
+function sameAsPublished(weekId: string, remote: MarketWeek): boolean {
+  const d = getDb()
+  const label = (d.prepare('SELECT label FROM weeks WHERE id = ?').get(weekId) as { label: string }).label.replace(/\s+/g, ' ').trim()
+  const topics = d.prepare("SELECT COUNT(*) n, COALESCE(SUM(status = 'ready'), 0) ready FROM topics WHERE week_id = ?").get(weekId) as { n: number; ready: number }
+  const cards = d.prepare('SELECT COUNT(*) n FROM cards c JOIN weeks w ON w.deck_id = c.deck_id WHERE w.id = ?').get(weekId) as { n: number }
+  const files = (d.prepare('SELECT name, path FROM course_files WHERE week_id = ? ORDER BY position').all(weekId) as { name: string; path: string }[]).map((f) => {
+    let size = -1
+    try {
+      size = statSync(f.path).size
+    } catch {
+      /* missing: never the same */
+    }
+    return `${f.name}|${size}`
+  })
+  return (
+    label === remote.label &&
+    topics.n === remote.topicCount &&
+    topics.ready === remote.writtenCount &&
+    cards.n === remote.cardCount &&
+    files.join('\n') === remote.files.map((f) => `${f.name}|${f.size}`).join('\n')
+  )
+}
+
+/**
+ * Every week that can be published (or one course's), and whether it needs
+ * uploading: 'new' (not on the marketplace, or taken down there since),
+ * 'changed' since you published it, or 'same' (up to date, so it's skipped).
+ */
+export async function publishPlan(courseId?: string): Promise<PublishableWeek[]> {
+  const weeks = publishableWeeks(courseId)
+  const on = published()
+  if (!weeks.some((w) => on[w.weekId])) return weeks.map((w) => ({ ...w, state: 'new' as const }))
+  // What's actually on the site now: a week taken down there needs publishing again.
+  const remote = new Map((await mine()).map((w) => [w.id, w]))
+  const hashes = publishedHashes()
+  return weeks.map((w): PublishableWeek => {
+    const r = on[w.weekId] ? remote.get(on[w.weekId]) : undefined
+    if (!r) return { ...w, state: 'new' }
+    const hash = weekContentHash(w.weekId)
+    if (hashes[w.weekId]) return { ...w, state: hashes[w.weekId] === hash ? 'same' : 'changed' }
+    // Published before hashes were kept: compare with what the site has, and remember it from now on.
+    if (!sameAsPublished(w.weekId, r)) return { ...w, state: 'changed' }
+    setPublishedHash(w.weekId, hash)
+    return { ...w, state: 'same' }
+  })
 }
 
 /** Publish several weeks one after another. One failing doesn't stop the rest. */
@@ -201,7 +267,7 @@ export async function publishMany(weeks: { weekId: string; course: string; label
 
 export async function remove(remoteWeekId: string): Promise<void> {
   await request(`/api/weeks/${encodeURIComponent(remoteWeekId)}`, { method: 'DELETE' })
-  setSetting(PUBLISHED_SETTING, Object.fromEntries(Object.entries(published()).filter(([, v]) => v !== remoteWeekId)))
+  forgetRemote(remoteWeekId)
 }
 
 /**
@@ -221,7 +287,7 @@ async function takeDown(weekIds: string[]): Promise<{ removed: number; failed: s
     } catch (e) {
       // Already gone from the site: just forget it.
       if (e instanceof MarketError && e.status === 404) {
-        setSetting(PUBLISHED_SETTING, Object.fromEntries(Object.entries(published()).filter(([, v]) => v !== id)))
+        forgetRemote(id)
         removed++
       } else failed.push((e as Error).message)
     }
@@ -326,6 +392,8 @@ export function queueAutoPublish(weekId: string): void {
       if (!d.prepare("SELECT 1 FROM topics WHERE week_id = ? AND status = 'ready'").get(weekId)) return
       const w = d.prepare('SELECT w.label, c.name FROM weeks w JOIN courses c ON c.id = w.course_id WHERE w.id = ?').get(weekId) as { label: string; name: string } | undefined
       if (!w || !autoPublishOn() || !isReady() || isWeekPrivate(weekId)) return
+      // Already published as it is now (say a topic failed to write): nothing to upload.
+      if (published()[weekId] && publishedHashes()[weekId] === weekContentHash(weekId)) return
       startJob('other', `Publish ${w.name} · ${w.label}`, () => publish(weekId))
     }, AUTO_PUBLISH_DELAY_MS)
   )

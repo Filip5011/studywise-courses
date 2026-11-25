@@ -291,6 +291,70 @@ describe('public and private', () => {
     }
   })
 
+  it('publishing everything skips weeks already up to date, and only uploads new or changed ones', async () => {
+    const market = await import('../../src/main/services/market')
+    const repo = await import('../../src/main/db/repo')
+    const { setSecret } = await import('../../src/main/secrets')
+    const course = svc.createCourse({ name: 'Skip 101', level: '' })
+    const w = svc.addWeek(course.id, 'Week 1')
+    const now = new Date().toISOString()
+    getDb()
+      .prepare("INSERT INTO topics (id, course_id, week_id, key, position, plan, status, content, updated_at) VALUES (?, ?, ?, 't1', 0, '{}', 'ready', 'First version', ?)")
+      .run(`topic-${w.id}`, course.id, w.id, now)
+    repo.setSetting('market.url', 'https://market.test')
+    setSecret('secret.marketKey', 'swm_test')
+    // The site: what's published, as /api/mine shows it.
+    let onSite: Record<string, unknown>[] = []
+    const uploads: string[] = []
+    const remoteWeek = (id: string) => ({ id, courseId: 'c', label: 'Week 1', number: 1, author: 'me', topics: [], topicCount: 1, writtenCount: 1, cardCount: 0, files: [], size: 1, plannedWith: null, writtenWith: [], downloads: 0, createdAt: now, updatedAt: now, mine: true, courseName: 'Skip 101' })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const u = String(url)
+      const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+      if (u.endsWith('/api/mine')) return ok({ weeks: onSite })
+      if (u.includes('/api/weeks') && init?.method === 'POST') {
+        uploads.push(u)
+        onSite = [remoteWeek('remote-skip')]
+        return ok({ week: remoteWeek('remote-skip') })
+      }
+      throw new Error(`unexpected ${u}`)
+    })
+    const state = async () => (await market.publishPlan(course.id)).map((x) => x.state)
+    try {
+      expect(await state()).toEqual(['new'])
+      await market.publish(w.id)
+      expect(uploads).toHaveLength(1)
+      // Nothing changed: skipped.
+      expect(await state()).toEqual(['same'])
+
+      // Studying (progress, cards waking up, timestamps) isn't a change.
+      getDb().prepare("UPDATE topics SET progress = '{\"read\":true}', updated_at = ? WHERE week_id = ?").run(new Date(Date.now() + 5000).toISOString(), w.id)
+      expect(await state()).toEqual(['same'])
+
+      // Editing the content is.
+      getDb().prepare("UPDATE topics SET content = 'Second version' WHERE week_id = ?").run(w.id)
+      expect(await state()).toEqual(['changed'])
+      await market.publish(w.id)
+      expect(await state()).toEqual(['same'])
+
+      // Taken down on the site: publish it again.
+      onSite = []
+      expect(await state()).toEqual(['new'])
+      onSite = [remoteWeek('remote-skip')]
+
+      // Published before hashes were kept: compared with the site's summary, then remembered.
+      repo.setSetting('market.publishedHash', {})
+      expect(await state()).toEqual(['same'])
+      expect(repo.getSetting<Record<string, string>>('market.publishedHash', {})[w.id]).toBeTruthy()
+      repo.setSetting('market.publishedHash', {})
+      onSite = [{ ...remoteWeek('remote-skip'), writtenCount: 0 }]
+      expect(await state()).toEqual(['changed'])
+      expect(uploads).toHaveLength(2)
+    } finally {
+      fetchMock.mockRestore()
+      setSecret('secret.marketKey', null)
+    }
+  })
+
   it('leaves whether a week is private out of the shared file', async () => {
     const course = svc.createCourse({ name: 'Share 101', level: '' })
     const w = svc.addWeek(course.id, 'Week 1', { private: true })

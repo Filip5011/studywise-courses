@@ -514,12 +514,12 @@ export const handlers = {
     mine: h(none, () => market.mine()),
     published: h(none, () => market.publishedWeeks()),
     publish: h(z.object({ weekId: id }), (i) => market.publish(i.weekId)),
-    /** Weeks that can be published: every course's, or one course's. */
-    publishable: h(z.object({ courseId: z.string().optional() }).optional(), (i) => market.publishableWeeks(i?.courseId)),
-    /** Publish all of them as a job (it can take a while with slides to upload). */
-    publishAll: h(z.object({ courseId: z.string().optional() }).optional(), (i) => {
-      const weeks = market.publishableWeeks(i?.courseId)
-      if (!weeks.length) throw new Error('There’s nothing to publish yet: write some topics first.')
+    /** Weeks that can be published (every course's, or one course's), and which are new, changed or already up to date. */
+    publishable: h(z.object({ courseId: z.string().optional() }).optional(), (i) => market.publishPlan(i?.courseId)),
+    /** Publish the new and changed ones as a job (it can take a while with slides to upload). Up-to-date weeks aren't uploaded again. */
+    publishAll: h(z.object({ courseId: z.string().optional() }).optional(), async (i) => {
+      const weeks = (await market.publishPlan(i?.courseId)).filter((w) => w.state !== 'same')
+      if (!weeks.length) throw new Error('Everything is already on the marketplace and up to date.')
       const title = i?.courseId ? `Publish ${weeks[0].course}` : `Publish ${weeks.length} week${weeks.length === 1 ? '' : 's'}`
       return startJob('other', title, (ctx) => market.publishMany(weeks, ctx))
     }),
