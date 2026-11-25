@@ -19,6 +19,10 @@ module.exports = {
   asarUnpack: ['resources/**', '**/*.node'],
   // better-sqlite3 ships Node-API prebuilds for every platform, so nothing needs compiling.
   npmRebuild: false,
+  // Where installed builds look for updates (electron-updater reads latest.yml /
+  // latest-mac.yml from the newest release). Builds never publish by themselves:
+  // scripts/release.sh uploads the files.
+  publish: [{ provider: 'github', owner: 'SnakeLuck360GT', repo: 'studywise-courses', releaseType: 'release' }],
   mac: {
     category: 'public.app-category.education',
     artifactName: 'Studywise-Courses-mac.${ext}',

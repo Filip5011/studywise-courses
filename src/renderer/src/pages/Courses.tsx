@@ -6,7 +6,9 @@ import type { CourseSummary } from '@shared/course'
 import { useStore, toast } from '../lib/store'
 import { api, errorText } from '../lib/api'
 import { offerPlan } from '../lib/courseFlows'
+import { offerMarketWeek } from '../lib/market'
 import { Shell, PageTitle } from '../components/Shell'
+import { PrivatePill, VisibilityField, type Visibility } from '../components/Visibility'
 import { Button, Card, Empty, Field, Input, Modal, Pill, ProgressBar, Textarea } from '../components/ui'
 
 export function Courses() {
@@ -57,7 +59,10 @@ export function Courses() {
           <Card key={c.id} onClick={() => go({ name: 'course', id: c.id })} className="flex flex-col gap-3">
             <div className="flex items-start justify-between gap-2">
               <h3 className="text-[1.05rem] leading-snug font-semibold">{c.name}</h3>
-              {c.planning && <Pill tone="accent">Planning…</Pill>}
+              <div className="flex shrink-0 items-center gap-1.5">
+                {c.private && !IS_MOBILE && <PrivatePill title="Private: none of its weeks go on the marketplace." />}
+                {c.planning && <Pill tone="accent">Planning…</Pill>}
+              </div>
             </div>
             <div className="text-[0.88rem] text-muted">
               {c.week_count} week{c.week_count === 1 ? '' : 's'} · {c.topic_count ? `${c.topic_count} topic${c.topic_count === 1 ? '' : 's'} · ${c.done_count} done` : c.planning ? 'planning topics…' : 'no topics yet'}
@@ -114,6 +119,7 @@ export function NewCourseModal() {
   const [weekLabel, setWeekLabel] = useState('Week 1')
   const [list, setList] = useState<string[]>([])
   const [note, setNote] = useState('')
+  const [visibility, setVisibility] = useState<Visibility>('public')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -122,6 +128,7 @@ export function NewCourseModal() {
     setName('')
     setWeekLabel('Week 1')
     setNote('')
+    setVisibility('public')
     void api.settings.all().then((s) => setLevel(String(s['profile.level'] ?? '')))
   }, [files])
 
@@ -131,13 +138,15 @@ export function NewCourseModal() {
     if (!name.trim()) return
     setBusy(true)
     try {
-      const c = await api.courses.create({ name: name.trim(), level: level.trim(), weekLabel: weekLabel.trim(), files: list, note })
+      const c = await api.courses.create({ name: name.trim(), level: level.trim(), weekLabel: weekLabel.trim(), files: list, note, private: visibility === 'private' })
       close()
       useStore.getState().bump()
       go({ name: 'course', id: c.id })
       // Files are added, not planned: ask first.
       const week = c.weeks.find((w) => w.id === c.firstWeekId)
       if (list.length && week) await offerPlan(week, { added: week.files.length })
+      // No files yet: has someone already made this week of this course?
+      else if (week) await offerMarketWeek(week)
     } catch (e) {
       toast(errorText(e), 'bad')
     } finally {
@@ -177,6 +186,7 @@ export function NewCourseModal() {
             <FileDrop list={list} setList={setList} />
           </div>
         </div>
+        <VisibilityField what="course" value={visibility} onChange={setVisibility} />
         <Field label="Note for the AI (optional)" hint="Added to every prompt for this course. You can change it later from the course page.">
           <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. This course is coding heavy and in C, so tailor notes to learning the theory and the coding together." />
         </Field>

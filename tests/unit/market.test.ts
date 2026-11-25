@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import JSZip from 'jszip'
 import { signature, similarity, words, SIGNATURE_SIZE } from '@shared/fingerprint'
-import { authorsText, modelLabel } from '@shared/market'
+import { authorsText, modelLabel, weeksByNumber } from '@shared/market'
 
 const lecture = (topic: string, n: number) =>
   Array.from({ length: n }, (_, i) => `In ${topic} the ${i}th idea builds on the one before it, and the lecture works an example through step by step.`).join(' ')
@@ -37,6 +37,14 @@ describe('week fingerprints', () => {
     expect(authorsText(['alex', 'sam'])).toBe('alex and sam')
     expect(authorsText(['alex', 'sam', 'kim'])).toBe('alex, sam and kim')
     expect(authorsText(['alex', 'sam', 'kim', 'lee', 'pat'])).toBe('alex, sam and 3 others')
+  })
+
+  it('groups versions of the same week, most downloaded then newest first', () => {
+    const w = (id: string, number: number, downloads: number, updatedAt: string) => ({ id, number, downloads, updatedAt })
+    const groups = weeksByNumber([w('a', 3, 1, '2026-01-01'), w('b', 1, 0, '2026-01-01'), w('c', 3, 5, '2026-01-01'), w('d', 3, 1, '2026-02-01'), w('e', 2, 0, '2026-01-01')])
+    expect(groups.map((g) => g.number)).toEqual([1, 2, 3])
+    expect(groups.map((g) => g.versions.map((v) => v.id))).toEqual([['b'], ['e'], ['c', 'd', 'a']])
+    expect(weeksByNumber([])).toEqual([])
   })
 
   it('labels models', () => {
@@ -115,5 +123,157 @@ describe('publishing a week (mock AI)', () => {
     const merged = svc.listTopics(mine.id).filter((t) => t.status === 'ready')
     const figures = merged.flatMap((t) => t.content!.sections.map((s) => s.figure).filter(Boolean))
     for (const f of figures) expect(f!.fileId).toBe(files[0].id)
+  })
+})
+
+describe('publishing automatically', () => {
+  it('waits for the week’s topics, publishes once, and never touches weeks with someone else’s work', async () => {
+    const market = await import('../../src/main/services/market')
+    const repo = await import('../../src/main/db/repo')
+    const { setSecret } = await import('../../src/main/secrets')
+    const jobs = await import('../../src/main/jobs')
+    const course = svc.createCourse({ name: 'Auto 101', level: '' })
+    const w = svc.addWeek(course.id)
+    await svc.addFiles(w.id, [PDF])
+    await svc.planWeek(w.id, ctx())
+    const [t1] = svc.listTopics(course.id)
+    await svc.writeTopic(t1.id, ctx())
+
+    // Off by default.
+    market.queueAutoPublish(w.id)
+    expect(market.pendingAutoPublish()).toEqual([])
+    // On, but no marketplace connected: nothing.
+    repo.setSetting('market.autoPublish', true)
+    market.queueAutoPublish(w.id)
+    expect(market.pendingAutoPublish()).toEqual([])
+
+    // (Zipping needs real timers, so the shared week goes in first.)
+    const file = join(dir, 'auto.studyweek')
+    await share.exportWeek(w.id, file)
+    const into = svc.addWeek(course.id, 'Week 2')
+    await share.importWeek(file, { weekId: into.id })
+
+    repo.setSetting('market.url', 'http://localhost:1')
+    setSecret('secret.marketKey', 'swm_test')
+    vi.useFakeTimers()
+    try {
+      // Several topics finishing: one publish, after the last.
+      market.queueAutoPublish(w.id)
+      market.queueAutoPublish(w.id)
+      expect(market.pendingAutoPublish()).toEqual([w.id])
+      // Another topic still writing when the wait is over: not yet.
+      getDb().prepare("UPDATE topics SET status = 'writing' WHERE id != ? AND week_id = ?").run(t1.id, w.id)
+      const before = jobs.listJobs().length
+      vi.advanceTimersByTime(market.AUTO_PUBLISH_DELAY_MS)
+      expect(market.pendingAutoPublish()).toEqual([])
+      expect(jobs.listJobs().length).toBe(before)
+      getDb().prepare("UPDATE topics SET status = 'planned' WHERE status = 'writing' AND week_id = ?").run(w.id)
+
+      // A shared week merged in: it's someone else's work now, so never automatic.
+      market.queueAutoPublish(into.id)
+      expect(market.pendingAutoPublish()).toEqual([])
+    } finally {
+      vi.useRealTimers()
+      repo.setSetting('market.autoPublish', false)
+      setSecret('secret.marketKey', null)
+    }
+  })
+})
+
+describe('public and private', () => {
+  it('makes courses and weeks public unless you say otherwise, and a new week follows its course', () => {
+    const pub = svc.createCourse({ name: 'Visible 101', level: '' })
+    expect(pub.private).toBe(false)
+    expect(svc.addWeek(pub.id).private).toBe(false)
+    expect(svc.addWeek(pub.id, 'Mine only', { private: true }).private).toBe(true)
+
+    const priv = svc.createCourse({ name: 'Hidden 101', level: '', private: true })
+    expect(priv.private).toBe(true)
+    expect(svc.addWeek(priv.id).private).toBe(true)
+    expect(svc.getCourse(priv.id).private).toBe(true)
+    expect(svc.listCourses().find((c) => c.id === priv.id)?.private).toBe(true)
+  })
+
+  it('never publishes a private week, or any week of a private course, by hand, in bulk or automatically', async () => {
+    const market = await import('../../src/main/services/market')
+    const repo = await import('../../src/main/db/repo')
+    const { setSecret } = await import('../../src/main/secrets')
+    const course = svc.createCourse({ name: 'Private 101', level: '' })
+    const w = svc.addWeek(course.id)
+    await svc.addFiles(w.id, [PDF])
+    await svc.planWeek(w.id, ctx())
+    const [t1] = svc.listTopics(course.id)
+    await svc.writeTopic(t1.id, ctx())
+    const listed = () => market.publishableWeeks(course.id).map((x) => x.weekId)
+    expect(listed()).toEqual([w.id])
+
+    repo.setSetting('market.autoPublish', true)
+    repo.setSetting('market.url', 'http://localhost:1')
+    setSecret('secret.marketKey', 'swm_test')
+    vi.useFakeTimers()
+    try {
+      // The week private.
+      await market.setWeekVisibility(w.id, true)
+      expect(market.isWeekPrivate(w.id)).toBe(true)
+      expect(listed()).toEqual([])
+      market.queueAutoPublish(w.id)
+      expect(market.pendingAutoPublish()).toEqual([])
+      await expect(market.publish(w.id)).rejects.toThrow(/week is private/)
+
+      // Public again: with automatic publishing on, it's queued.
+      await market.setWeekVisibility(w.id, false)
+      expect(market.pendingAutoPublish()).toEqual([w.id])
+
+      // The course private: the week is too, whatever it's set to, and the queued publish is dropped.
+      await market.setCourseVisibility(course.id, true)
+      expect(market.pendingAutoPublish()).toEqual([])
+      expect(svc.getCourse(course.id).weeks[0].private).toBe(false)
+      expect(market.isWeekPrivate(w.id)).toBe(true)
+      expect(listed()).toEqual([])
+      await expect(market.publish(w.id)).rejects.toThrow(/course is private/)
+
+      await market.setCourseVisibility(course.id, false)
+      expect(listed()).toEqual([w.id])
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      repo.setSetting('market.autoPublish', false)
+      setSecret('secret.marketKey', null)
+    }
+  })
+
+  it('takes a published week down when it goes private', async () => {
+    const market = await import('../../src/main/services/market')
+    const repo = await import('../../src/main/db/repo')
+    const { setSecret } = await import('../../src/main/secrets')
+    const course = svc.createCourse({ name: 'Takedown 101', level: '' })
+    const w = svc.addWeek(course.id)
+    repo.setSetting('market.published', { [w.id]: 'remote-1' })
+    repo.setSetting('market.url', 'https://market.test')
+    setSecret('secret.marketKey', 'swm_test')
+    const calls: string[] = []
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      calls.push(`${init?.method ?? 'GET'} ${String(url)}`)
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    try {
+      const r = await market.setCourseVisibility(course.id, true)
+      expect(r).toEqual({ removed: 1, failed: [] })
+      expect(calls).toEqual(['DELETE https://market.test/api/weeks/remote-1'])
+      expect(market.publishedWeeks()[w.id]).toBeUndefined()
+      // Nothing published any more: nothing to take down.
+      expect(await market.setWeekVisibility(w.id, true)).toEqual({ removed: 0, failed: [] })
+      expect(calls).toHaveLength(1)
+    } finally {
+      fetchMock.mockRestore()
+      setSecret('secret.marketKey', null)
+    }
+  })
+
+  it('leaves whether a week is private out of the shared file', async () => {
+    const course = svc.createCourse({ name: 'Share 101', level: '' })
+    const w = svc.addWeek(course.id, 'Week 1', { private: true })
+    const { json } = await share.weekZip(w.id)
+    expect('private' in JSON.parse(JSON.stringify(json.week))).toBe(false)
   })
 })

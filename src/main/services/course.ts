@@ -63,7 +63,8 @@ const WHOLE_PDF_PAGES = 40
 // Rows
 
 type CourseRow = Course & { note_folder_id?: string | null }
-type WeekRow = Omit<Week, 'recall_off'> & { outline: string | null; recall_off: number; planned_with?: string | null }
+type RawCourseRow = Omit<CourseRow, 'private'> & { private: number }
+type WeekRow = Omit<Week, 'recall_off' | 'private'> & { outline: string | null; recall_off: number; private: number; planned_with?: string | null }
 type TopicRow = {
   id: string
   course_id: string
@@ -124,12 +125,13 @@ const toTopic = (r: TopicRow, counts: Map<string, number>): Topic => ({
   updated_at: r.updated_at
 })
 
-const toWeek = ({ outline: _o, recall_off, planned_with: _p, ...w }: WeekRow): Week => ({ ...w, recall_off: !!recall_off })
+const toWeek = ({ outline: _o, recall_off, private: p, planned_with: _p, ...w }: WeekRow): Week => ({ ...w, recall_off: !!recall_off, private: !!p })
+const toCourseRow = (r: RawCourseRow): CourseRow => ({ ...r, private: !!r.private })
 
 function courseRow(id: string): CourseRow {
-  const r = getDb().prepare('SELECT * FROM courses WHERE id = ?').get(id) as CourseRow | undefined
+  const r = getDb().prepare('SELECT * FROM courses WHERE id = ?').get(id) as RawCourseRow | undefined
   if (!r) throw new Error('Course not found')
-  return r
+  return toCourseRow(r)
 }
 
 function weekRow(id: string): WeekRow {
@@ -159,7 +161,7 @@ export function courseFilePath(fileId: string): string {
 }
 
 export function listCourses(): CourseSummary[] {
-  const rows = getDb().prepare('SELECT * FROM courses ORDER BY updated_at DESC').all() as CourseRow[]
+  const rows = (getDb().prepare('SELECT * FROM courses ORDER BY updated_at DESC').all() as RawCourseRow[]).map(toCourseRow)
   return rows.map((r) => {
     const topics = getDb().prepare('SELECT status, progress FROM topics WHERE course_id = ?').all(r.id) as { status: string; progress: string }[]
     const weeks = getDb().prepare('SELECT status FROM weeks WHERE course_id = ?').all(r.id) as { status: string }[]
@@ -360,6 +362,22 @@ export function setWeekRecall(weekId: string, on: boolean): Week {
   return toWeek(weekRow(weekId))
 }
 
+/** Private: the course's weeks are never published to the marketplace (see market.setCourseVisibility, which also takes them down). */
+export function setCoursePrivate(courseId: string, isPrivate: boolean): Course {
+  courseRow(courseId)
+  getDb().prepare('UPDATE courses SET private = ? WHERE id = ?').run(isPrivate ? 1 : 0, courseId)
+  touchCourse(courseId)
+  return courseRow(courseId)
+}
+
+/** Private: the week is never published to the marketplace (see market.setWeekVisibility, which also takes it down). */
+export function setWeekPrivate(weekId: string, isPrivate: boolean): Week {
+  weekRow(weekId)
+  getDb().prepare('UPDATE weeks SET private = ? WHERE id = ?').run(isPrivate ? 1 : 0, weekId)
+  touchCourse(weekRow(weekId).course_id)
+  return toWeek(weekRow(weekId))
+}
+
 /** Every deck holding this course's cards: the week decks, plus an old course-wide deck. */
 export function courseDeckIds(courseId: string): string[] {
   const c = courseRow(courseId)
@@ -435,21 +453,25 @@ export function organizeCourseDecks(): void {
   }
 }
 
-export function createCourse(input: { name: string; level: string }): Course {
+/** New courses are public (their weeks can go on the marketplace) unless made private. */
+export function createCourse(input: { name: string; level: string; private?: boolean }): Course {
   const id = uid()
   const t = now()
-  getDb().prepare('INSERT INTO courses (id, name, module, level, deck_id, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?)').run(id, input.name, input.name, input.level, t, t)
+  getDb()
+    .prepare('INSERT INTO courses (id, name, module, level, deck_id, private, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)')
+    .run(id, input.name, input.name, input.level, input.private ? 1 : 0, t, t)
   deckFolder(id)
   return courseRow(id)
 }
 
-export function addWeek(courseId: string, label?: string): Week {
-  courseRow(courseId)
+/** A new week is public or private as you say, or like its course when you don't. */
+export function addWeek(courseId: string, label?: string, opts: { private?: boolean } = {}): Week {
+  const c = courseRow(courseId)
   const n = (getDb().prepare('SELECT COUNT(*) n, COALESCE(MAX(position), -1) p FROM weeks WHERE course_id = ?').get(courseId) as { n: number; p: number })
   const id = uid()
   getDb()
-    .prepare("INSERT INTO weeks (id, course_id, position, label, status, error, outline, created_at) VALUES (?, ?, ?, ?, 'empty', NULL, NULL, ?)")
-    .run(id, courseId, n.p + 1, label?.trim() || `Week ${n.n + 1}`, now())
+    .prepare("INSERT INTO weeks (id, course_id, position, label, status, error, outline, private, created_at) VALUES (?, ?, ?, ?, 'empty', NULL, NULL, ?, ?)")
+    .run(id, courseId, n.p + 1, label?.trim() || `Week ${n.n + 1}`, (opts.private ?? c.private) ? 1 : 0, now())
   ensureWeekDeck(id)
   touchCourse(courseId)
   return toWeek(weekRow(id))

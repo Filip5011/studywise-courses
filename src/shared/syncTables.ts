@@ -45,6 +45,16 @@ const NOT_APPLYING = `(SELECT value FROM sync_meta WHERE key = 'applying') = '0'
 const DEVICE = `(SELECT value FROM sync_meta WHERE key = 'device_id')`
 const NEXT_SEQ = `(SELECT COALESCE(MAX(seq), 0) + 1 FROM sync_log)`
 
+/**
+ * A change's time: now, or just after the change it replaces if that's later.
+ * When both devices change a row, the later change wins; but a change made
+ * after seeing the other device's version must win even if this device's clock
+ * is behind, or lands in the same millisecond. So it's always later than the
+ * version it overwrote (1.5 ms, which can't round back to the same time).
+ * Used inside UPDATE sync_log, where `at` is the logged time being replaced.
+ */
+const AFTER_PREVIOUS = `MAX(${NOW}, COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', julianday(at) + 0.0015 / 86400.0), ''))`
+
 // Update-then-insert rather than INSERT OR REPLACE: a trigger fired by a
 // foreign-key action can't use its own conflict policy. Updating also keeps
 // seq strictly increasing (a peer's cursor never skips a change).
@@ -52,7 +62,7 @@ function logRow(t: SyncTable, row: 'NEW' | 'OLD', deleted: 0 | 1): string {
   const key = keyExpr(t, row)
   const match = `tbl = '${t.name}' AND pk = ${key}`
   return (
-    `UPDATE sync_log SET seq = ${NEXT_SEQ}, at = ${NOW}, deleted = ${deleted}, origin = ${DEVICE} WHERE ${match}; ` +
+    `UPDATE sync_log SET seq = ${NEXT_SEQ}, at = ${AFTER_PREVIOUS}, deleted = ${deleted}, origin = ${DEVICE} WHERE ${match}; ` +
     `INSERT INTO sync_log (tbl, pk, seq, at, deleted, origin) SELECT '${t.name}', ${key}, ${NEXT_SEQ}, ${NOW}, ${deleted}, ${DEVICE} WHERE NOT EXISTS (SELECT 1 FROM sync_log WHERE ${match});`
   )
 }

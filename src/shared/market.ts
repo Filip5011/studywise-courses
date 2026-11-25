@@ -75,12 +75,19 @@ export interface MarketMatch {
   score: number
   /** How many of your files are byte-for-byte the same as theirs. */
   sameFiles: number
+  /** The same week number of what looks like the same course (by name), whatever the slides. */
+  sameWeek: boolean
 }
 
 export interface MarketStatus {
   url: string
   hasKey: boolean
 }
+
+/** Settings: publish your weeks as their topics are written. */
+export const AUTO_PUBLISH_SETTING = 'market.autoPublish'
+/** Weeks that hold someone else's work (a shared or marketplace week went into them): never published automatically. */
+export const IMPORTED_WEEKS_SETTING = 'market.importedWeeks'
 
 export type MarketSort = 'recent' | 'popular'
 
@@ -89,6 +96,22 @@ export function authorsText(shown: string[]): string {
   if (shown.length <= 2) return shown.join(' and ')
   if (shown.length === 3) return `${shown[0]}, ${shown[1]} and ${shown[2]}`
   return `${shown[0]}, ${shown[1]} and ${shown.length - 2} others`
+}
+
+/**
+ * A course's weeks grouped by week number, in order, so everyone's version of
+ * week 3 sits together. In each group the most downloaded version comes
+ * first, then the most recently updated.
+ */
+export function weeksByNumber<W extends Pick<MarketWeek, 'number' | 'downloads' | 'updatedAt'>>(weeks: W[]): { number: number; versions: W[] }[] {
+  const groups = new Map<number, W[]>()
+  for (const w of weeks) groups.set(w.number, [...(groups.get(w.number) ?? []), w])
+  return [...groups.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([number, versions]) => ({
+      number,
+      versions: versions.sort((a, b) => b.downloads - a.downloads || b.updatedAt.localeCompare(a.updatedAt))
+    }))
 }
 
 /** "opus · high", "sonnet", "gpt-oss:120b (Ollama) · high". */
