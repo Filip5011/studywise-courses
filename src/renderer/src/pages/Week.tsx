@@ -30,10 +30,11 @@ import {
   Sparkles,
   Trash2,
   Upload,
-  X
+  X,
+  Zap
 } from 'lucide-react'
-import { NOTE_LEVEL_INFO, type CourseFile, type CourseFull, type Topic, type WeekFull } from '@shared/course'
-import { offerPlan, switchLevel, writeTopics } from '../lib/courseFlows'
+import { NOTE_LEVEL_INFO, NOTE_LEVELS, type CourseFile, type CourseFull, type NoteLevel, type Topic, type WeekFull } from '@shared/course'
+import { offerPlan, switchLevel, switchWeekLevel, writeQuickReview, writeTopics } from '../lib/courseFlows'
 import { planUsageText, type JobInfo } from '@shared/types'
 import { shareWeek } from '../lib/weekShare'
 import { chooseMarketWeek, declinedMarketWeek, findMarketWeek, marketMatches, modelsText, publishToMarket, setWeekVisibility } from '../lib/market'
@@ -96,6 +97,12 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
   const unwritten = w.topics.filter((t) => t.status === 'planned' || t.status === 'error')
   const done = w.topics.filter((t) => t.progress.done).length
   const nextUp = w.topics.find((t) => t.status === 'ready' && !t.progress.done)
+  // Written topics, and the ones that don't have a quick review yet.
+  const written = w.topics.filter((t) => t.status === 'ready')
+  const noQuick = written.filter((t) => !t.levels.includes('quick'))
+  // Every level any written topic has: more than one, and the week can switch them all at once.
+  const weekLevels = NOTE_LEVELS.filter((l) => written.some((t) => t.levels.includes(l)))
+  const shownLevels = [...new Set(written.map((t) => t.level))]
   // Trimming recall cards: the whole week, or one topic.
   const [trim, setTrim] = useState<{ topicId?: string; title: string } | null>(null)
   // A blank week someone has already published: offered on the page.
@@ -129,6 +136,12 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
   // Pick the level(s) of detail first; every level written is kept.
   const write = async (topics: Topic[]) => {
     if (await writeTopics(topics)) reload()
+  }
+  const quickReview = async (topics: Topic[], name: string) => {
+    if (await writeQuickReview(topics, name)) reload()
+  }
+  const showWeekAt = async (level: NoteLevel) => {
+    if (await switchWeekLevel(written, level)) reload()
   }
   // Planning always asks first, with room for instructions that take priority.
   const plan = async () => {
@@ -189,6 +202,14 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
             {!planning && unwritten.length > 0 && (
               <Button variant={nextUp ? 'outline' : 'primary'} onClick={() => write(unwritten)}>
                 <Sparkles className="size-4" /> Write {unwritten.length === w.topics.length ? `all ${unwritten.length}` : `${unwritten.length} more`}
+              </Button>
+            )}
+            {!planning && noQuick.length > 0 && (
+              <Button
+                onClick={() => quickReview(noQuick, noQuick.length === 1 ? (noQuick[0].content?.title ?? noQuick[0].plan.title) : `${noQuick.length} topics`)}
+                title="Shorter notes for revising, saved alongside the ones you have. Publishing the week includes both."
+              >
+                <Zap className="size-4" /> Quick review{noQuick.length < written.length ? ` of ${noQuick.length} more` : ''}
               </Button>
             )}
             <Menu
@@ -264,7 +285,18 @@ function WeekView({ course: c, week: w, prev, next, reload }: { course: CourseFu
         )}
       </PageTitle>
 
-      {w.topics.length > 0 && <ProgressBar value={done / w.topics.length} className="mb-8" />}
+      {w.topics.length > 0 && <ProgressBar value={done / w.topics.length} className={weekLevels.length > 1 ? 'mb-4' : 'mb-8'} />}
+      {weekLevels.length > 1 && (
+        <div className="mb-8 flex flex-wrap items-center gap-2 text-[0.88rem]">
+          <span className="text-muted">Show the week’s notes as</span>
+          <Segmented
+            value={(shownLevels.length === 1 ? shownLevels[0] : '') as NoteLevel}
+            onChange={(l) => void showWeekAt(l)}
+            options={weekLevels.map((l) => ({ value: l, label: NOTE_LEVEL_INFO[l].label }))}
+          />
+          {shownLevels.length > 1 && <span className="text-muted">(mixed)</span>}
+        </div>
+      )}
 
       <div className="flex flex-col gap-10">
         <section>
@@ -574,7 +606,7 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (to
             </Button>
           )}
         </div>
-        {ready && !writing && (t.levels.length > 1 || t.level !== 'standard') && (
+        {ready && !writing && (
           <div className="flex basis-full flex-wrap items-center gap-2 sm:pl-13">
             <span className="text-[0.8rem] text-muted">Notes:</span>
             {t.levels.length > 1 ? (
@@ -585,6 +617,11 @@ function TopicRow({ t, write, saveNote, reload, onTrim }: { t: Topic; write: (to
               />
             ) : (
               <Pill tone="accent">{NOTE_LEVEL_INFO[t.level].label}</Pill>
+            )}
+            {!t.levels.includes('quick') && (
+              <Button size="sm" variant="ghost" onClick={() => void writeQuickReview([t], t.content?.title ?? t.plan.title).then((ok) => ok && reload())} title="Shorter notes for revising, saved alongside these. Publishing the week includes both.">
+                <Zap className="size-3.5" /> Add a quick review
+              </Button>
             )}
           </div>
         )}

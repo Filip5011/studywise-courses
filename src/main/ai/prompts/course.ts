@@ -157,13 +157,14 @@ Write topic {{topic_id}} ("{{topic_title}}"). Only teach what belongs to that to
     system: `You mark a student's short written answers fairly and kindly. You reply with JSON only.`,
     user_template: `Mark my answer to a question from {{module}}. I'm a {{level}} student.
 
-Question: {{question}}
+Question ({{marks}} marks): {{question}}
 Model answer: {{model}}
-Key points:
+Key points (a mark each):
 {{points}}
 My answer: {{answer}}
 
-- "score" out of 10, mostly for the key points I got. Different wording is fine if the meaning is right. Don't take marks off for spelling or grammar.
+- "marks": how many of the {{marks}} marks I get, a whole number: one for each key point I made. Different wording is fine if the meaning is right. Don't take marks off for spelling or grammar.
+- "score" out of 10, in line with my marks.
 - Be fair, not generous. Name-dropping the right term without explaining it only gets partial credit.
 - "got": the key points I hit. "missed": the ones I didn't.
 - "wrong": if I said something wrong, say what it was and correct it in one line. Otherwise empty.

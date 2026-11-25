@@ -72,6 +72,8 @@ export type AiTopic = z.infer<typeof AiTopic>
 
 export const CourseMarkOut = z.object({
   score: z.number().min(0).max(10),
+  /** Marks awarded, one per key point (explainMarks). Older prompts don't return it. */
+  marks: z.number().nullable().default(null),
   got: z.array(z.string()).default([]),
   missed: z.array(z.string()).default([]),
   wrong: z.string().default(''),
@@ -465,10 +467,25 @@ export function asLearnQuestion(q: CourseQuestion, id: string): LearnQuestion | 
         payload: { categories: q.buckets, items: q.items.map((i) => ({ text: i.item, category: q.buckets.find((b) => normalizeAnswer(b) === normalizeAnswer(i.bucket)) ?? i.bucket })) }
       }
     case 'explain':
-      return { ...common, type: 'free_answer', payload: { question: q.q, expected_answer: q.model } }
+      return { ...common, type: 'free_answer', payload: { question: q.q, expected_answer: q.model, marks: explainMarks(q) } }
     default:
       return null
   }
+}
+
+/** What an explain (essay) question is out of: a mark for each key point in its mark scheme. */
+export function explainMarks(q: Extract<CourseQuestion, { type: 'explain' }>): number {
+  return Math.max(1, q.points.filter((p) => p.trim()).length)
+}
+
+/**
+ * The hints a question can give, one at a time and only when you ask: its
+ * nudge, then for an essay question each point the mark scheme gives a mark for.
+ */
+export function questionHints(q: CourseQuestion): string[] {
+  const nudge = q.hint.trim() ? [q.hint.trim()] : []
+  if (q.type !== 'explain') return nudge
+  return [...nudge, ...q.points.filter((p) => p.trim()).map((p) => `A mark for: ${p.trim()}`)]
 }
 
 /** Mark everything except explain (which goes to Claude). */

@@ -28,6 +28,7 @@ import {
   NOTE_LEVEL_INFO,
   pageList,
   sanitizeQuestions,
+  explainMarks,
   shuffleMcqs,
   type AiTopic,
   type Course,
@@ -964,9 +965,11 @@ const sameFront = (a: string, b: string) => a.replace(/\s+/g, ' ').trim().toLowe
  * is kept, so you can switch between them; the first level written (in
  * NOTE_LEVELS order) is the one shown afterwards. Writing a level the topic
  * already has replaces just that level. With no levels given, the level shown
- * is written again.
+ * is written again. With `keepShown`, a topic that's already written keeps
+ * showing what it shows now and the new levels are saved alongside it (a quick
+ * review next to your notes, say).
  */
-export async function writeTopic(topicId: string, ctx: JobContext, instructions = '', levels: NoteLevel[] = []): Promise<{ topicId: string; sections: number; cards: number }> {
+export async function writeTopic(topicId: string, ctx: JobContext, instructions = '', levels: NoteLevel[] = [], keepShown = false): Promise<{ topicId: string; sections: number; cards: number }> {
   const first = getTopic(topicId)
   const pick = levels.length ? levels : [first.content ? first.level : ('standard' as NoteLevel)]
   const want = NOTE_LEVELS.filter((l) => pick.includes(l))
@@ -975,7 +978,8 @@ export async function writeTopic(topicId: string, ctx: JobContext, instructions 
   for (const [i, level] of want.entries()) {
     // Each level gets its share of the progress bar.
     const scaled: typeof live = live && ((u) => live(u.percent == null ? u : { ...u, percent: (i + u.percent) / want.length }))
-    const r = await writeTopicLevel(topicId, { ...ctx, live: scaled }, instructions, level, i === 0, want.length > 1)
+    const show = i === 0 && !(keepShown && first.content && level !== first.level)
+    const r = await writeTopicLevel(topicId, { ...ctx, live: scaled }, instructions, level, show, want.length > 1)
     if (i === 0) out = r
   }
   return out
@@ -1174,16 +1178,19 @@ export function resetTopicProgress(topicId: string): Topic {
 export async function markExplain(courseId: string, q: Extract<CourseQuestion, { type: 'explain' }>, answer: string, topicId?: string): Promise<{ mark: Mark; wrong: string }> {
   const c = courseRow(courseId)
   const deckId = topicId ? ensureWeekDeck(getTopic(topicId).week_id) : courseDeckId(courseId)
-  if (!answer.trim()) return { mark: { score: 0, verdict: 'wrong', detail: { points_found: [], points_missing: q.points, short_feedback: 'Have a go first, even a rough answer gets marks.' }, by: 'code' }, wrong: '' }
+  const total = explainMarks(q)
+  if (!answer.trim()) return { mark: { score: 0, verdict: 'wrong', detail: { points_found: [], points_missing: q.points, short_feedback: 'Have a go first, even a rough answer gets marks.', marks: { got: 0, total } }, by: 'code' }, wrong: '' }
   const r = await runAI<CourseMarkOut>({
     task: 'course_mark',
-    vars: { module: c.module || c.name, level: c.level, question: q.q, model: q.model, points: q.points.map((p) => `- ${p}`).join('\n'), answer },
+    vars: { module: c.module || c.name, level: c.level, question: q.q, marks: String(total), model: q.model, points: q.points.map((p) => `- ${p}`).join('\n'), answer },
     deckId
   })
   const m = r.data
-  const score = Math.max(0, Math.min(10, m.score))
+  // Marks awarded decide the score; an edited prompt that only gives a score out of 10 still works.
+  const got = m.marks != null ? Math.max(0, Math.min(total, Math.round(m.marks))) : Math.round((Math.max(0, Math.min(10, m.score)) / 10) * total)
+  const score = m.marks != null ? Math.round((got / total) * 100) / 10 : Math.max(0, Math.min(10, m.score))
   return {
-    mark: { score, verdict: verdictFor(score, thresholdsFor(deckId)), detail: { points_found: m.got, points_missing: m.missed, short_feedback: m.feedback }, by: 'ai' },
+    mark: { score, verdict: verdictFor(score, thresholdsFor(deckId)), detail: { points_found: m.got, points_missing: m.missed, short_feedback: m.feedback, marks: { got, total } }, by: 'ai' },
     wrong: m.wrong
   }
 }

@@ -7,6 +7,7 @@ import {
   expectedText,
   markCourseAnswer,
   questionText,
+  questionHints,
   reshuffleQuestion,
   shuffleMcqs,
   type CourseAnswer,
@@ -45,7 +46,8 @@ interface Slot {
   answer: CourseAnswer | null
   mark: Mark | null
   marking: boolean
-  hint: boolean
+  /** How many of the question's hints you've asked for. */
+  hint: number
   correction: string
   overridden: boolean
   /** The mark before "I was right", so it can be undone. */
@@ -53,7 +55,7 @@ interface Slot {
   /** Already queued to come back, so going back and continuing again doesn't add it twice. */
   requeued?: boolean
 }
-const emptySlot = (): Slot => ({ answer: null, mark: null, marking: false, hint: false, correction: '', overridden: false })
+const emptySlot = (): Slot => ({ answer: null, mark: null, marking: false, hint: 0, correction: '', overridden: false })
 
 /** Learning: each section's notes, flashcards and questions. The test (the topic's check questions) is separate, started from the course page. */
 function buildSteps(t: Topic, test: boolean): Step[] {
@@ -266,7 +268,10 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
   const override = () => {
     if (!slot.mark || slot.mark.verdict === 'correct' || !progress.current) return
     const before = credit(slot.mark)
-    patch(at, { mark: { ...slot.mark, score: 10, verdict: 'correct' }, overridden: true, before: slot.mark })
+    // An essay question you say you got right gets full marks too.
+    const marks = slot.mark.detail?.marks
+    const detail = marks ? { ...slot.mark.detail, marks: { ...marks, got: marks.total } } : slot.mark.detail
+    patch(at, { mark: { ...slot.mark, score: 10, verdict: 'correct', detail }, overridden: true, before: slot.mark })
     if (counts()) save({ correct: progress.current.correct + 1 - before })
   }
   /** Take back "I was right": the original mark comes back (and it'll come round again if it was wrong). */
@@ -325,7 +330,7 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
         if (slot.mark) next()
         else window.dispatchEvent(new Event(SUBMIT_EVENT))
       } else if (!slot.mark && step.q.type === 'true_false' && (e.key === 't' || e.key === 'f')) void submit({ type: 'true_false', value: e.key === 't' })
-      else if (!slot.mark && e.key === 'h') patch(at, { hint: true })
+      else if (!slot.mark && e.key === 'h' && step?.kind === 'q') patch(at, { hint: Math.min(questionHints(step.q).length, Number(slot.hint) + 1) })
       else if (slot.mark && e.key === 'r') slot.overridden ? undoOverride() : override()
       else if (slot.overridden && e.key === 'u') undoOverride()
     }
@@ -352,6 +357,9 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
   const idx = siblings.findIndex((t) => t.id === topic.id)
   const nextTopic = siblings.slice(idx + 1).find((t) => t.status === 'ready' && !t.progress.done)
   const verdict = slot.mark?.verdict
+  // Hints come one at a time, only when asked for.
+  const hints = step?.kind === 'q' ? questionHints(step.q) : []
+  const shownHints = Math.min(hints.length, Number(slot.hint) || 0)
 
   return (
     <div className={cx('flex min-h-full flex-col px-[clamp(16px,3vw,40px)] pb-10', IS_MOBILE ? 'pt-2' : 'pt-5')}>
@@ -458,18 +466,22 @@ export function TopicPage({ id, section, test = false }: { id: string; section?:
                 </Pill>
               ) : null}
               <span className="flex-1" />
-              {!slot.mark && step.q.hint && (
-                <Button size="sm" variant="ghost" onClick={() => patch(at, { hint: true })} disabled={slot.hint} title="Hint (H)">
-                  Hint
+              {!slot.mark && hints.length > 0 && (
+                <Button size="sm" variant="ghost" onClick={() => patch(at, { hint: shownHints + 1 })} disabled={shownHints >= hints.length} title="Hint (H)">
+                  <Lightbulb className="size-4" /> {shownHints === 0 ? 'Hint' : shownHints < hints.length ? `Another hint (${shownHints + 1} of ${hints.length})` : 'No more hints'}
                 </Button>
               )}
               <Button size="sm" variant="ghost" onClick={explain} title="Explain">
                 Explain
               </Button>
             </div>
-            {slot.hint && !slot.mark && (
-              <div className="pop-in mb-4 flex items-start gap-2 rounded-lg bg-warn-soft px-4 py-2.5 text-[0.95rem]">
-                <Lightbulb className="mt-0.5 size-4 shrink-0 text-warn" /> <span>{step.q.hint}</span>
+            {shownHints > 0 && !slot.mark && (
+              <div className="pop-in mb-4 flex flex-col gap-1.5 rounded-lg bg-warn-soft px-4 py-2.5 text-[0.95rem]">
+                {hints.slice(0, shownHints).map((h, i) => (
+                  <div key={i} className="pop-in flex items-start gap-2">
+                    <Lightbulb className="mt-0.5 size-4 shrink-0 text-warn" /> <span>{h}</span>
+                  </div>
+                ))}
               </div>
             )}
             <div className={cx('rounded-xl border bg-surface p-[clamp(18px,3.4vw,36px)] transition-colors duration-500', verdict === 'correct' ? 'border-good/50' : verdict === 'partial' ? 'border-warn/50' : verdict === 'wrong' ? 'border-bad/50' : 'border-line')}>

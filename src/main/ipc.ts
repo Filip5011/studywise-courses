@@ -422,12 +422,13 @@ export const handlers = {
       return startJob('course_outline', `Plan: ${c.name} · ${w.label}`, (ctx) => course.planWeek(i.weekId, ctx, i.instructions))
     }),
     /** Write topics at one or more levels of detail (all levels are kept). No levels: write the level shown again. */
-    write: h(z.object({ topicIds: z.array(id).min(1).max(200), instructions: z.string().max(4000).default(''), levels: z.array(z.enum(NOTE_LEVELS)).max(3).default([]) }), (i) => {
+    /** keepShown: written topics keep showing their current notes; the new levels go alongside (a quick review, say). */
+    write: h(z.object({ topicIds: z.array(id).min(1).max(200), instructions: z.string().max(4000).default(''), levels: z.array(z.enum(NOTE_LEVELS)).max(3).default([]), keepShown: z.boolean().default(false) }), (i) => {
       const topics = i.topicIds.map((tid) => course.getTopic(tid)).filter((t) => t.status !== 'writing')
       return topics.map((t) =>
         startJob('course_topic', `Topic: ${t.plan.title}`, (ctx) =>
           // Done or not, the week may be ready to publish (Settings → Marketplace → automatically).
-          course.writeTopic(t.id, ctx, i.instructions, i.levels).finally(() => market.queueAutoPublish(t.week_id))
+          course.writeTopic(t.id, ctx, i.instructions, i.levels, i.keepShown).finally(() => market.queueAutoPublish(t.week_id))
         )
       )
     }),

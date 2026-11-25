@@ -75,6 +75,46 @@ export async function writeTopics(topics: Topic[], opts: { title?: string; level
   }
 }
 
+/**
+ * Write a quick review of written topics, saved alongside the notes they
+ * already have: those stay as they are (and stay shown), the recall cards are
+ * reused, and you can switch between the two. Sharing or publishing the week
+ * takes both. A topic that already has a quick review gets it rewritten.
+ */
+export async function writeQuickReview(topics: Topic[], name: string): Promise<boolean> {
+  if (!topics.length) return false
+  const redo = topics.filter((t) => t.levels.includes('quick')).length
+  const r = await askWrite(`Quick review of ${name}`, {
+    message: `Shorter sections that take less time, still covering nearly everything. It’s saved alongside the notes you have: they stay as they are, the recall cards are reused, and you can switch between them on the week page.${redo ? ` ${redo === topics.length ? 'Its quick review is' : `${redo} of them already have a quick review, which is`} written again.` : ''} Publishing or sharing the week includes both.`,
+    levels: ['quick'],
+    multi: false,
+    written: topics.length === 1 ? topics[0].levels : [],
+    confirmText: 'Write quick review'
+  })
+  if (!r) return false
+  try {
+    await api.courses.write({ topicIds: topics.map((t) => t.id), levels: r.levels, instructions: r.instructions, keepShown: true })
+    useStore.getState().bump()
+    return true
+  } catch (e) {
+    toast(errorText(e), 'bad')
+    return false
+  }
+}
+
+/** Show every written topic of a week at a level, where it's written at that level. */
+export async function switchWeekLevel(topics: Topic[], level: NoteLevel): Promise<boolean> {
+  const change = topics.filter((t) => t.status === 'ready' && t.level !== level && t.levels.includes(level))
+  try {
+    for (const t of change) await api.courses.setLevel({ topicId: t.id, level })
+    useStore.getState().bump()
+    return change.length > 0
+  } catch (e) {
+    toast(errorText(e), 'bad')
+    return false
+  }
+}
+
 /** Show a topic at another level of detail it's written at. */
 export async function switchLevel(topic: Topic, level: NoteLevel): Promise<Topic | null> {
   if (topic.level === level) return topic

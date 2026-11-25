@@ -213,7 +213,7 @@ export const TASK_INFO: Record<TaskId, TaskInfo> = {
     label: 'Course: mark an explain answer',
     defaultModel: 'sonnet',
     modes: ['json'],
-    variables: ['module', 'level', 'question', 'model', 'points', 'answer'],
+    variables: ['module', 'level', 'question', 'marks', 'model', 'points', 'answer'],
     streams: false,
     long: false
   },

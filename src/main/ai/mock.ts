@@ -275,7 +275,8 @@ export function mockResponse(task: TaskId, mode: string, vars: Record<string, un
       const points = v('points').split('\n').map((p) => p.replace(/^-\s*/, '').trim()).filter(Boolean)
       const hit = points.filter((p) => words(p).some((w) => got.has(w)))
       const out = {
-        score,
+        score: points.length ? Math.round((hit.length / points.length) * 10) : score,
+        marks: hit.length,
         got: hit,
         missed: points.filter((p) => !hit.includes(p)),
         wrong: '',
